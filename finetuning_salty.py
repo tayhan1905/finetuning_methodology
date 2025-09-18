@@ -10,6 +10,11 @@ import pandas as pd
 import itertools
 import logging
 from datetime import datetime
+
+# Set up logging for verbose output
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
+logger = logging.getLogger()
+
 # ----------------------------
 # Adapter Definitions
 # ----------------------------
