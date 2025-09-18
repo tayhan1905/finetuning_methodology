@@ -8,8 +8,8 @@ import json
 import os
 import pandas as pd
 import itertools
-from copy import deepcopy
-
+import logging
+from datetime import datetime
 # ----------------------------
 # Adapter Definitions
 # ----------------------------
@@ -250,12 +250,21 @@ if __name__ == "__main__":
 
     results = []
 
+    logger.info("Starting experiments...")
+
     # Loop over rank and model modes
     for r, mode in itertools.product(ranks, modes):
+        logger.info(f"Running experiment for {mode} with rank {r}...")
         base_model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
         model = replace_qkv_with_adapter(base_model, r=r, mode=mode)
+        
+        # Log the model configuration before training
+        logger.info(f"Model: {mode}, Rank: {r}, Training started.")
+        
         result = train_and_evaluate(model, train_ds, val_ds, model_name, r, mode)
         results.append({"rank": r, "mode": mode, "results": result})
+
+    logger.info("Experiments completed. Generating results table...")
 
     # Convert results to a DataFrame for easy analysis
     result_table = []
@@ -270,6 +279,9 @@ if __name__ == "__main__":
     # Save the result table to a CSV file for further analysis
     os.makedirs("./results", exist_ok=True)
     df.to_csv("./results/comparison_table.csv", index=False)
+
+    # Log the final result table
+    logger.info("Results table saved to ./results/comparison_table.csv")
 
     # Print out the table
     print(df)
