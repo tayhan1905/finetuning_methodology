@@ -213,7 +213,7 @@ def compute_metrics(eval_pred):
 def train_and_evaluate(model, train_ds, val_ds, model_name, r, mode):
     args = TrainingArguments(
         output_dir=f"./results/{model_name}/{mode}/r_{r}",
-        evaluation_strategy="epoch",
+        # evaluation_strategy="epoch",
         learning_rate=5e-5,
         per_device_train_batch_size=16,
         per_device_eval_batch_size=64,
