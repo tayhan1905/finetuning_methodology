@@ -189,7 +189,7 @@ def train_and_evaluate(model, train_ds, val_ds, model_name, r, mode):
         learning_rate=5e-5,
         per_device_train_batch_size=16,
         per_device_eval_batch_size=64,
-        num_train_epochs=50,  # Increased to 50 epochs
+        num_train_epochs=4,  
         weight_decay=0.01,
         logging_dir="./logs",
         save_strategy="no",
