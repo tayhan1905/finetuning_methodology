@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, Trainer, TrainingArguments
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, Trainer, TrainingArguments, TrainerCallback
 from datasets import load_dataset
 import evaluate
 import json
@@ -10,9 +10,10 @@ import pandas as pd
 import itertools
 import logging
 import time
-from datetime import datetime
 
-# Set up logging for verbose output
+# ----------------------------
+# Logging setup
+# ----------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger()
 
@@ -47,10 +48,12 @@ class DoRA(nn.Module):
         delta_w = self.magnitude.unsqueeze(0) * direction_norm
         return F.linear(x, self.base.weight, self.base.bias) + F.linear(x, delta_w)
 
+
 def truncated_svd(W, rank):
     U, S, Vh = torch.linalg.svd(W, full_matrices=False)
     r = min(rank, S.numel())
     return U[:, :r].contiguous(), S[:r].contiguous(), Vh[:r, :].contiguous()
+
 
 def svd_head_tail(W, r):
     U, S, Vh = torch.linalg.svd(W, full_matrices=False)
@@ -60,6 +63,7 @@ def svd_head_tail(W, r):
     U_top, S_top, Vh_top = U[:, :r_top], S[:r_top], Vh[:r_top, :]
     U_bot, S_bot, Vh_bot = U[:, p-r_bot:], S[p-r_bot:], Vh[p-r_bot:, :]
     return (U_top, S_top, Vh_top), (U_bot, S_bot, Vh_bot)
+
 
 class SaltEdoraLinear(nn.Module):
     def __init__(self, base_linear: nn.Linear, r: int, tail_mode='free'):
@@ -111,6 +115,7 @@ class SaltEdoraLinear(nn.Module):
             zR = F.linear(zT, self.R.T)
             y = y + F.linear(zR, self.U_bot)
         return y
+
 
 class SALT(nn.Module):
     def __init__(self, base_linear: nn.Linear, r: int):
@@ -183,17 +188,71 @@ def compute_metrics(eval_pred):
     preds = logits.argmax(-1)
     return accuracy.compute(predictions=preds, references=labels)
 
+def count_trainable_params(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+# ----------------------------
+# Custom Callback for Tracking
+# ----------------------------
+
+class TrackingCallback(TrainerCallback):
+    def __init__(self, output_dir):
+        self.output_dir = output_dir
+        self.batch_logs = []
+        self.epoch_logs = []
+        self.epoch_start_time = None
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.log_history and "loss" in state.log_history[-1]:
+            step_log = {
+                "step": state.global_step,
+                "epoch": state.epoch,
+                "loss": state.log_history[-1]["loss"]
+            }
+            self.batch_logs.append(step_log)
+
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        self.epoch_start_time = time.time()
+
+    def on_epoch_end(self, args, state, control, **kwargs):
+        epoch_time = time.time() - self.epoch_start_time
+        metrics = state.log_history[-1] if state.log_history else {}
+        self.epoch_logs.append({
+            "epoch": state.epoch,
+            "loss": metrics.get("loss", None),
+            "eval_loss": metrics.get("eval_loss", None),
+            "epoch_time": epoch_time
+        })
+
+    def on_train_end(self, args, state, control, **kwargs):
+        batch_file = os.path.join(self.output_dir, "loss_per_batch.csv")
+        pd.DataFrame(self.batch_logs).to_csv(batch_file, index=False)
+
+        epoch_file = os.path.join(self.output_dir, "loss_per_epoch.csv")
+        pd.DataFrame(self.epoch_logs).to_csv(epoch_file, index=False)
+
+
+# ----------------------------
+# Training and Evaluation
+# ----------------------------
+
 def train_and_evaluate(model, train_ds, val_ds, model_name, r, mode):
+    output_dir = f"./results/{model_name}/{mode}/r_{r}"
+
     args = TrainingArguments(
-        output_dir=f"./results/{model_name}/{mode}/r_{r}",
+        output_dir=output_dir,
         learning_rate=5e-5,
         per_device_train_batch_size=16,
         per_device_eval_batch_size=64,
-        num_train_epochs=4,  
+        num_train_epochs=4,
         weight_decay=0.01,
         logging_dir="./logs",
         save_strategy="no",
+        logging_steps=10,
     )
+
+    tracking_cb = TrackingCallback(output_dir)
 
     trainer = Trainer(
         model=model,
@@ -201,6 +260,7 @@ def train_and_evaluate(model, train_ds, val_ds, model_name, r, mode):
         train_dataset=train_ds,
         eval_dataset=val_ds,
         compute_metrics=compute_metrics,
+        callbacks=[tracking_cb],
     )
     
     # Record start time
@@ -211,18 +271,24 @@ def train_and_evaluate(model, train_ds, val_ds, model_name, r, mode):
     
     # Record end time
     end_time = time.time()
-    
-    # Calculate runtime
     runtime = end_time - start_time
     logger.info(f"Training and evaluation completed in {runtime:.2f} seconds.")
     
-    # Save results in a JSON file
-    result_path = f"./results/{model_name}/{mode}/r_{r}/results.json"
+    # Count trainable params
+    trainable_params = count_trainable_params(model)
+    logger.info(f"Trainable parameters for {mode}, rank {r}: {trainable_params}")
+
+    # Save results in JSON
+    result_path = os.path.join(output_dir, "results.json")
     os.makedirs(os.path.dirname(result_path), exist_ok=True)
+    results["trainable_params"] = trainable_params
+    results["runtime_total"] = runtime
+    
     with open(result_path, "w") as f:
         json.dump(results, f, indent=4)
 
     return results, runtime
+
 
 # ----------------------------
 # Main experiment runner
@@ -232,8 +298,8 @@ if __name__ == "__main__":
     model_name = "bert-base-uncased"
     train_ds, val_ds, tokenizer = get_dataset_and_tokenizer(model_name)
 
-    ranks = [4, 8, 16, 32, 64]  # List of ranks to experiment with
-    modes = ["lora", "dora", "saltedora", "salt"]  # The adapter types
+    ranks = [4, 8, 16, 32, 64]
+    modes = ["lora", "dora", "saltedora", "salt"]
 
     results = []
     runtimes = []
@@ -241,7 +307,6 @@ if __name__ == "__main__":
 
     logger.info("Starting experiments...")
 
-    # Loop over rank and model modes
     for r, mode in itertools.product(ranks, modes):
         logger.info(f"Running experiment for {mode} with rank {r}...")
         base_model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
@@ -254,24 +319,20 @@ if __name__ == "__main__":
 
     logger.info("Experiments completed. Generating results table...")
 
-    # Convert results to a DataFrame for easy analysis
     result_table = []
     for res, runtime, loss in zip(results, runtimes, losses):
         rank = res["rank"]
         mode = res["mode"]
         accuracy = res["results"].get("eval_accuracy", None)
-        time_taken = runtime["runtime"]
         train_loss = loss["train_loss"]
-        result_table.append([rank, mode, accuracy, train_loss, time_taken])
+        time_taken = runtime["runtime"]
+        params = res["results"].get("trainable_params", None)
+        result_table.append([rank, mode, accuracy, train_loss, time_taken, params])
 
-    df = pd.DataFrame(result_table, columns=["Rank", "Mode", "Accuracy", "Train Loss", "Time Taken"])
+    df = pd.DataFrame(result_table, columns=["Rank", "Mode", "Accuracy", "Train Loss", "Time Taken", "Trainable Params"])
 
-    # Save the result table to a CSV file for further analysis
     os.makedirs("./results", exist_ok=True)
     df.to_csv("./results/comparison_table.csv", index=False)
 
-    # Log the final result table
     logger.info("Results table saved to ./results/comparison_table.csv")
-
-    # Print out the table
     print(df)
