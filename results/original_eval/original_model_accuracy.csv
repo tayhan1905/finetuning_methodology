@@ -1,0 +1,2 @@
+Model,Accuracy,Dataset,Time Taken (s),Trainable Params
+bert-base-uncased,0.4908256880733945,SST-2,156.42807412147522,109483778

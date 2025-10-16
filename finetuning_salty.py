@@ -1,7 +1,13 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, Trainer, TrainingArguments, TrainerCallback
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    Trainer,
+    TrainingArguments,
+    TrainerCallback
+)
 from datasets import load_dataset
 import evaluate
 import json
@@ -10,6 +16,9 @@ import pandas as pd
 import itertools
 import logging
 import time
+from peft import LoraConfig, get_peft_model
+from models import SALT, SALTEdoraLinear, SALTEdoraLinearV2
+from utils.svd_utils import svd_head_tail, truncated_svd
 
 # ----------------------------
 # Logging setup
@@ -18,239 +27,200 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger()
 
 # ----------------------------
-# Adapter Definitions
+# Adapter Replacement function
 # ----------------------------
-
-class LoRA(nn.Module):
-    def __init__(self, base_linear: nn.Linear, r: int):
-        super().__init__()
-        self.base = base_linear
-        self.in_features = base_linear.in_features
-        self.out_features = base_linear.out_features
-        self.A = nn.Parameter(torch.randn(self.in_features, r) * 0.01)
-        self.B = nn.Parameter(torch.randn(r, self.out_features) * 0.01)
-
-    def forward(self, x):
-        return F.linear(x, self.base.weight, self.base.bias) + F.linear(x, self.A @ self.B)
-
-
-class DoRA(nn.Module):
-    def __init__(self, base_linear: nn.Linear, r: int):
-        super().__init__()
-        self.base = base_linear
-        self.in_features = base_linear.in_features
-        self.out_features = base_linear.out_features
-        self.magnitude = nn.Parameter(torch.zeros(self.in_features))
-        self.direction = nn.Parameter(torch.randn(self.in_features, self.out_features) * 0.01)
-
-    def forward(self, x):
-        direction_norm = F.normalize(self.direction, p=2, dim=0)
-        delta_w = self.magnitude.unsqueeze(0) * direction_norm
-        return F.linear(x, self.base.weight, self.base.bias) + F.linear(x, delta_w)
-
-
-def truncated_svd(W, rank):
-    U, S, Vh = torch.linalg.svd(W, full_matrices=False)
-    r = min(rank, S.numel())
-    return U[:, :r].contiguous(), S[:r].contiguous(), Vh[:r, :].contiguous()
-
-
-def svd_head_tail(W, r):
-    U, S, Vh = torch.linalg.svd(W, full_matrices=False)
-    p = S.numel()
-    r_top = min(r, p)
-    r_bot = min(r, p - r_top) if (2*r <= p) else min(r, max(0, p - r_top))
-    U_top, S_top, Vh_top = U[:, :r_top], S[:r_top], Vh[:r_top, :]
-    U_bot, S_bot, Vh_bot = U[:, p-r_bot:], S[p-r_bot:], Vh[p-r_bot:, :]
-    return (U_top, S_top, Vh_top), (U_bot, S_bot, Vh_bot)
-
-
-class SaltEdoraLinear(nn.Module):
-    def __init__(self, base_linear: nn.Linear, r: int, tail_mode='free'):
-        super().__init__()
-        assert isinstance(base_linear, nn.Linear)
-        self.base = base_linear
-        self.in_features  = base_linear.in_features
-        self.out_features = base_linear.out_features
-        self.bias = base_linear.bias is not None
-
-        self.base.weight.requires_grad_(False)
-        if self.bias:
-            self.base.bias.requires_grad_(False)
-
-        W = self.base.weight.detach().to(torch.float32)
-        (U_top, S_top, Vh_top), (U_bot, S_bot, Vh_bot) = svd_head_tail(W, r)
-        dtype = self.base.weight.dtype
-        device = self.base.weight.device
-
-        self.register_buffer("U_top", U_top.to(dtype).to(device))
-        self.register_buffer("S_top", S_top.to(dtype).to(device))
-        self.register_buffer("Vh_top", Vh_top.to(dtype).to(device))
-        self.register_buffer("U_bot", U_bot.to(dtype).to(device))
-        self.register_buffer("S_bot", S_bot.to(dtype).to(device))
-        self.register_buffer("Vh_bot", Vh_bot.to(dtype).to(device))
-
-        self.r_top = S_top.numel()
-        self.r_bot = S_bot.numel()
-
-        self.alpha = nn.Parameter(torch.zeros(self.r_top, dtype=dtype, device=device))
-        self.beta  = nn.Parameter(torch.zeros(self.r_top, dtype=dtype, device=device))
-
-        self.tail_mode = tail_mode
-        if self.r_bot > 0:
-            if tail_mode == 'free':
-                R0 = torch.zeros(self.r_bot, self.r_bot, dtype=dtype, device=device)
-                self.R = nn.Parameter(R0)  # neutral (no delta)
-
-    def forward(self, x):
-        y = F.linear(x, self.base.weight, self.base.bias)
-
-        if self.r_top > 0:
-            zH = F.linear(x, self.Vh_top)
-            delta_sigma = self.S_top * self.alpha + self.beta
-            y = y + F.linear(zH * delta_sigma, self.U_top)
-
-        if self.r_bot > 0:
-            zT = F.linear(x, self.Vh_bot)
-            zR = F.linear(zT, self.R.T)
-            y = y + F.linear(zR, self.U_bot)
-        return y
-
-
-class SALT(nn.Module):
-    def __init__(self, base_linear: nn.Linear, r: int):
-        super().__init__()
-        self.base = base_linear
-        self.in_features = base_linear.in_features
-        self.out_features = base_linear.out_features
-
-        W = self.base.weight.detach().to(torch.float32)
-        U, S, Vh = torch.svd(W)
-
-        self.register_buffer("U", U)
-        self.register_buffer("S", S)
-        self.register_buffer("Vh", Vh)
-
-        self.alpha = nn.Parameter(torch.zeros(r, dtype=torch.float32))
-        self.beta = nn.Parameter(torch.zeros(r, dtype=torch.float32))
-
-    def forward(self, x):
-        delta_sigma = self.S[:self.alpha.size(0)] * self.alpha + self.beta
-        update = self.U[:, :self.alpha.size(0)] @ torch.diag(delta_sigma) @ self.Vh[:self.alpha.size(0), :]
-        return F.linear(x, self.base.weight + update, self.base.bias)
-
-
-# ----------------------------
-# Replacement function
-# ----------------------------
-
 def replace_qkv_with_adapter(model, r=8, mode="lora"):
+    """
+    mode:
+      'lora' / 'dora' → PEFT LoRA (optionally DoRA)
+      'salt'          → custom SALT
+      'saltedora'     → custom SALT + EDoRA (BRA)
+      'saltedora_v2'  → custom SALT + EDoRA V2 (BDRA)
+    """
+    if mode in ["lora", "dora"]:
+        use_dora = (mode == "dora")
+        config = LoraConfig(
+            r=r,
+            lora_alpha=16,
+            target_modules=["query", "key", "value"],
+            use_dora=use_dora,
+        )
+        return get_peft_model(model, config)
+
     for name, module in model.named_children():
         if isinstance(module, nn.Linear) and ("query" in name or "key" in name or "value" in name):
-            if mode == "lora":
-                setattr(model, name, LoRA(module, r=r))
-            elif mode == "dora":
-                setattr(model, name, DoRA(module, r=r))
+            if mode == "salt":
+                setattr(model, name, SALT(module, r_top=r))
             elif mode == "saltedora":
-                setattr(model, name, SaltEdoraLinear(module, r=r, tail_mode='free'))
-            elif mode == "salt":
-                setattr(model, name, SALT(module, r=r))
+                setattr(model, name, SALTEdoraLinear(module, r=r))
+            elif mode == "saltedora_v2":
+                setattr(model, name, SALTEdoraLinearV2(module, r=r))
         else:
             replace_qkv_with_adapter(module, r=r, mode=mode)
     return model
 
+# ----------------------------
+# Dataset registry (GLUE only, accuracy metrics)
+# ----------------------------
+TASKS = {
+    "glue/sst2": dict(hub_id="glue/sst2", subset="sst2",
+                      text=("sentence", None), num_labels=2,
+                      problem_type="single_label_classification",
+                      metrics=["accuracy"]),
+    "glue/rte": dict(hub_id="glue/rte", subset="rte",
+                     text=("sentence1", "sentence2"), num_labels=2,
+                     problem_type="single_label_classification",
+                     metrics=["accuracy"]),
+    "glue/qnli": dict(hub_id="glue/qnli", subset="qnli",
+                      text=("question", "sentence"), num_labels=2,
+                      problem_type="single_label_classification",
+                      metrics=["accuracy"]),
+    "glue/mnli": dict(hub_id="glue/mnli", subset="mnli",
+                      text=("premise", "hypothesis"), num_labels=3,
+                      problem_type="single_label_classification",
+                      metrics=["accuracy"]),
+    "glue/qqp": dict(hub_id="glue/qqp", subset="qqp",
+                     text=("question1", "question2"), num_labels=2,
+                     problem_type="single_label_classification",
+                     metrics=["accuracy"]),
+}
 
 # ----------------------------
-# Dataset setup
+# Dataset loading
 # ----------------------------
+def load_task_dataset(task_key, tokenizer, model_name):
+    cfg = TASKS[task_key]
 
-def get_dataset_and_tokenizer(model_name="bert-base-uncased"):
-    dataset = load_dataset("glue", "sst2")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    raw = load_dataset("glue", cfg["subset"])
+    label_col = "label"
+    t1, t2 = cfg["text"]
 
     def tokenize_fn(batch):
-        return tokenizer(batch["sentence"], truncation=True, padding="max_length", max_length=128)
+        if t2 is None:
+            return tokenizer(batch[t1], truncation=True, padding="max_length", max_length=128)
+        else:
+            return tokenizer(batch[t1], batch[t2], truncation=True, padding="max_length", max_length=128)
 
-    tokenized = dataset.map(tokenize_fn, batched=True)
-    tokenized = tokenized.rename_column("label", "labels")
+    ## Map all the inputs and tokenize them beofre throwing them into the model
+    tokenized = raw.map(tokenize_fn, batched=True)
+    tokenized = tokenized.rename_column(label_col, "labels")
     tokenized.set_format("torch")
-    return tokenized["train"], tokenized["validation"], tokenizer
 
+    if task_key == "glue/mnli":
+        train_ds = tokenized["train"]
+        val_ds = tokenized["validation_matched"]
+    else:
+        train_ds = tokenized["train"]
+        val_ds = tokenized["validation"]
+
+    return train_ds, val_ds, cfg["num_labels"], cfg["problem_type"], cfg
 
 # ----------------------------
-# Training utilities
+# Metric builder
 # ----------------------------
+def build_metrics(task_key):
+    cfg = TASKS[task_key]
+    mets = {m: evaluate.load(m) for m in cfg["metrics"]}
 
-accuracy = evaluate.load("accuracy")
+    def compute(eval_pred):
+        logits, labels = eval_pred
+        preds = logits.argmax(-1)
+        out = {}
+        for mname, metric in mets.items():
+            out[mname] = metric.compute(predictions=preds, references=labels)[mname]
+        if "accuracy" in out:
+            out["eval_accuracy"] = out["accuracy"]
+        return out
 
-def compute_metrics(eval_pred):
-    logits, labels = eval_pred
-    preds = logits.argmax(-1)
-    return accuracy.compute(predictions=preds, references=labels)
+    return compute
 
+# ----------------------------
+# Utilities
+# ----------------------------
 def count_trainable_params(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-
-# ----------------------------
-# Custom Callback for Tracking
-# ----------------------------
-
 class TrackingCallback(TrainerCallback):
+    """
+    Tracks and saves:
+    - Loss per batch (step)
+    - Loss and eval_loss per epoch
+    - Time per epoch
+    - Total training runtime
+    """
     def __init__(self, output_dir):
         self.output_dir = output_dir
         self.batch_logs = []
         self.epoch_logs = []
         self.epoch_start_time = None
+        self.train_start_time = None
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        self.train_start_time = time.time()
 
     def on_step_end(self, args, state, control, **kwargs):
+        """Logs loss after every batch."""
         if state.log_history and "loss" in state.log_history[-1]:
-            step_log = {
-                "step": state.global_step,
+            self.batch_logs.append({
+                "global_step": state.global_step,
                 "epoch": state.epoch,
                 "loss": state.log_history[-1]["loss"]
-            }
-            self.batch_logs.append(step_log)
+            })
 
     def on_epoch_begin(self, args, state, control, **kwargs):
         self.epoch_start_time = time.time()
 
     def on_epoch_end(self, args, state, control, **kwargs):
+        """Logs eval + train loss and time per epoch."""
         epoch_time = time.time() - self.epoch_start_time
         metrics = state.log_history[-1] if state.log_history else {}
         self.epoch_logs.append({
             "epoch": state.epoch,
-            "loss": metrics.get("loss", None),
+            "train_loss": metrics.get("loss", None),
             "eval_loss": metrics.get("eval_loss", None),
             "epoch_time": epoch_time
         })
 
     def on_train_end(self, args, state, control, **kwargs):
-        batch_file = os.path.join(self.output_dir, "loss_per_batch.csv")
-        pd.DataFrame(self.batch_logs).to_csv(batch_file, index=False)
+        """Save batch- and epoch-level logs."""
+        total_runtime = time.time() - self.train_start_time if self.train_start_time else None
+        os.makedirs(self.output_dir, exist_ok=True)
 
-        epoch_file = os.path.join(self.output_dir, "loss_per_epoch.csv")
-        pd.DataFrame(self.epoch_logs).to_csv(epoch_file, index=False)
+        # Save per-batch losses
+        if self.batch_logs:
+            batch_df = pd.DataFrame(self.batch_logs)
+            batch_df.to_csv(os.path.join(self.output_dir, "loss_per_batch.csv"), index=False)
 
+        # Save per-epoch losses + time + total runtime
+        epoch_df = pd.DataFrame(self.epoch_logs)
+        epoch_df["total_runtime_s"] = total_runtime
+        epoch_df.to_csv(os.path.join(self.output_dir, "loss_per_epoch.csv"), index=False)
+
+        print(f"✅ Training complete. Total runtime: {total_runtime:.2f}s saved to {self.output_dir}")
 
 # ----------------------------
-# Training and Evaluation
+# Training + Evaluation
 # ----------------------------
-
-def train_and_evaluate(model, train_ds, val_ds, model_name, r, mode):
-    output_dir = f"./results/{model_name}/{mode}/r_{r}"
+def train_and_evaluate(model, train_ds, val_ds, tokenizer, model_name, r, mode, task_key, num_labels, problem_type, metrics_fn):
+    safe_task = task_key.replace("/", "_")
+    output_dir = f"./results/{model_name}/{mode}/r_{r}/{safe_task}"
+    os.makedirs(output_dir, exist_ok=True)
 
     args = TrainingArguments(
         output_dir=output_dir,
         learning_rate=5e-5,
         per_device_train_batch_size=16,
         per_device_eval_batch_size=64,
-        num_train_epochs=5,
+        num_train_epochs=3,
         weight_decay=0.01,
-        logging_dir="./logs",
-        save_strategy="no",
+        logging_dir=os.path.join(output_dir, "logs"),
         logging_steps=10,
+        save_strategy="no",
+        evaluation_strategy="epoch"
     )
+
+    model.config.num_labels = num_labels
+    model.config.problem_type = "single_label_classification"
 
     tracking_cb = TrackingCallback(output_dir)
 
@@ -259,80 +229,66 @@ def train_and_evaluate(model, train_ds, val_ds, model_name, r, mode):
         args=args,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        compute_metrics=compute_metrics,
+        tokenizer=tokenizer,
+        compute_metrics=metrics_fn,
         callbacks=[tracking_cb],
     )
-    
-    # Record start time
+
+    # Start timer for total training duration
     start_time = time.time()
-    
     trainer.train()
     results = trainer.evaluate(val_ds)
-    
-    # Record end time
-    end_time = time.time()
-    runtime = end_time - start_time
-    logger.info(f"Training and evaluation completed in {runtime:.2f} seconds.")
-    
-    # Count trainable params
-    trainable_params = count_trainable_params(model)
-    logger.info(f"Trainable parameters for {mode}, rank {r}: {trainable_params}")
+    total_runtime = time.time() - start_time
 
-    # Save results in JSON
-    result_path = os.path.join(output_dir, "results.json")
-    os.makedirs(os.path.dirname(result_path), exist_ok=True)
-    results["trainable_params"] = trainable_params
-    results["runtime_total"] = runtime
-    
-    with open(result_path, "w") as f:
+    # Add metadata for this run
+    results["trainable_params"] = count_trainable_params(model)
+    results["runtime_total_s"] = total_runtime
+
+    # Save per-run summary JSON
+    with open(os.path.join(output_dir, "results.json"), "w") as f:
         json.dump(results, f, indent=4)
 
-    return results, runtime
+    print(f"🔹 Completed {mode} | {task_key} | r={r} | Accuracy={results.get('eval_accuracy', 'N/A'):.4f} | Runtime={total_runtime:.2f}s")
+
+    return results
 
 
 # ----------------------------
 # Main experiment runner
 # ----------------------------
-
 if __name__ == "__main__":
     model_name = "bert-base-uncased"
-    train_ds, val_ds, tokenizer = get_dataset_and_tokenizer(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     ranks = [4, 8, 16, 32, 64]
-    modes = ["lora", "dora", "saltedora", "salt"]
+    modes = ["lora", "dora", "salt", "saltedora", "saltedora_v2"]
+    datasets_to_run = list(TASKS.keys())
 
-    results = []
-    runtimes = []
-    losses = []
+    summary_rows = []
+    logger.info("Starting GLUE classification experiments...")
 
-    logger.info("Starting experiments...")
+    for r, mode, task_key in itertools.product(ranks, modes, datasets_to_run):
+        logger.info(f"Running {mode} (rank={r}) on {task_key}...")
+        train_ds, val_ds, num_labels, problem_type, cfg = load_task_dataset(task_key, tokenizer, model_name)
+        metrics_fn = build_metrics(task_key)
 
-    for r, mode in itertools.product(ranks, modes):
-        logger.info(f"Running experiment for {mode} with rank {r}...")
-        base_model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
+        base_model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=num_labels)
         model = replace_qkv_with_adapter(base_model, r=r, mode=mode)
-        
-        result, runtime = train_and_evaluate(model, train_ds, val_ds, model_name, r, mode)
-        results.append({"rank": r, "mode": mode, "results": result})
-        runtimes.append({"rank": r, "mode": mode, "runtime": runtime})
-        losses.append({"rank": r, "mode": mode, "train_loss": result["eval_loss"]})
 
-    logger.info("Experiments completed. Generating results table...")
+        results = train_and_evaluate(model, train_ds, val_ds, tokenizer, model_name, r, mode, task_key, num_labels, problem_type, metrics_fn)
 
-    result_table = []
-    for res, runtime, loss in zip(results, runtimes, losses):
-        rank = res["rank"]
-        mode = res["mode"]
-        accuracy = res["results"].get("eval_accuracy", None)
-        train_loss = loss["train_loss"]
-        time_taken = runtime["runtime"]
-        params = res["results"].get("trainable_params", None)
-        result_table.append([rank, mode, accuracy, train_loss, time_taken, params])
+        summary_rows.append({
+            "rank": r,
+            "mode": mode,
+            "task": task_key,
+            "accuracy": results.get("eval_accuracy", None),
+            "eval_loss": results.get("eval_loss", None),
+            "runtime_s": results.get("runtime_total"),
+            "trainable_params": results.get("trainable_params")
+        })
 
-    df = pd.DataFrame(result_table, columns=["Rank", "Mode", "Accuracy", "Train Loss", "Time Taken", "Trainable Params"])
-
+    summary_df = pd.DataFrame(summary_rows)
     os.makedirs("./results", exist_ok=True)
-    df.to_csv("./results/comparison_table.csv", index=False)
-
-    logger.info("Results table saved to ./results/comparison_table.csv")
-    print(df)
+    summary_df.to_csv("./results/summary_glue_classification.csv", index=False)
+    logger.info("Global summary saved to ./results/summary_glue_classification.csv")
+    print(summary_df)
