@@ -216,7 +216,6 @@ def train_and_evaluate(model, train_ds, val_ds, tokenizer, model_name, r, mode, 
         logging_dir=os.path.join(output_dir, "logs"),
         logging_steps=10,
         save_strategy="no",
-        evaluation_strategy="epoch"
     )
 
     model.config.num_labels = num_labels
