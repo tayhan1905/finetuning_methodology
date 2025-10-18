@@ -19,6 +19,7 @@ import time
 from peft import LoraConfig, get_peft_model
 from models import SALT, SALTEdoraLinear, SALTEdoraLinearV2
 from utils.svd_utils import svd_head_tail, truncated_svd
+import argparse
 
 # ----------------------------
 # Logging setup
@@ -67,22 +68,22 @@ TASKS = {
                       text=("sentence", None), num_labels=2,
                       problem_type="single_label_classification",
                       metrics=["accuracy"]),
-    "glue/rte": dict(hub_id="glue/rte", subset="rte",
-                     text=("sentence1", "sentence2"), num_labels=2,
-                     problem_type="single_label_classification",
-                     metrics=["accuracy"]),
-    "glue/qnli": dict(hub_id="glue/qnli", subset="qnli",
-                      text=("question", "sentence"), num_labels=2,
-                      problem_type="single_label_classification",
-                      metrics=["accuracy"]),
-    "glue/mnli": dict(hub_id="glue/mnli", subset="mnli",
-                      text=("premise", "hypothesis"), num_labels=3,
-                      problem_type="single_label_classification",
-                      metrics=["accuracy"]),
-    "glue/qqp": dict(hub_id="glue/qqp", subset="qqp",
-                     text=("question1", "question2"), num_labels=2,
-                     problem_type="single_label_classification",
-                     metrics=["accuracy"]),
+#     "glue/rte": dict(hub_id="glue/rte", subset="rte",
+#                      text=("sentence1", "sentence2"), num_labels=2,
+#                      problem_type="single_label_classification",
+#                      metrics=["accuracy"]),
+#     "glue/qnli": dict(hub_id="glue/qnli", subset="qnli",
+#                       text=("question", "sentence"), num_labels=2,
+#                       problem_type="single_label_classification",
+#                       metrics=["accuracy"]),
+#     "glue/mnli": dict(hub_id="glue/mnli", subset="mnli",
+#                       text=("premise", "hypothesis"), num_labels=3,
+#                       problem_type="single_label_classification",
+#                       metrics=["accuracy"]),
+#     "glue/qqp": dict(hub_id="glue/qqp", subset="qqp",
+#                      text=("question1", "question2"), num_labels=2,
+#                      problem_type="single_label_classification",
+#                      metrics=["accuracy"]),
 }
 
 # ----------------------------
@@ -250,7 +251,6 @@ def train_and_evaluate(model, train_ds, val_ds, tokenizer, model_name, r, mode, 
     print(f"🔹 Completed {mode} | {task_key} | r={r} | Accuracy={results.get('eval_accuracy', 'N/A'):.4f} | Runtime={total_runtime:.2f}s")
 
     return results
-
 
 # ----------------------------
 # Main experiment runner
