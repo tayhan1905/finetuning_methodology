@@ -68,10 +68,10 @@ TASKS = {
                       text=("sentence", None), num_labels=2,
                       problem_type="single_label_classification",
                       metrics=["accuracy"]),
-#     "glue/rte": dict(hub_id="glue/rte", subset="rte",
-#                      text=("sentence1", "sentence2"), num_labels=2,
-#                      problem_type="single_label_classification",
-#                      metrics=["accuracy"]),
+    # "glue/rte": dict(hub_id="glue/rte", subset="rte",
+    #                  text=("sentence1", "sentence2"), num_labels=2,
+    #                  problem_type="single_label_classification",
+    #                  metrics=["accuracy"]),
 #     "glue/qnli": dict(hub_id="glue/qnli", subset="qnli",
 #                       text=("question", "sentence"), num_labels=2,
 #                       problem_type="single_label_classification",
@@ -260,7 +260,7 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     ranks = [4, 8, 16, 32, 64]
-    modes = ["lora", "dora", "salt", "saltedora", "saltedora_v2"]
+    modes = ["lora", "dora", "salt", "saltedora_v2"]
     datasets_to_run = list(TASKS.keys())
 
     summary_rows = []
