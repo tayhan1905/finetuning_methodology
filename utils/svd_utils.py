@@ -9,8 +9,14 @@ def truncated_svd(W, rank):
 def svd_head_tail(W, r):
     U, S, Vh = torch.linalg.svd(W, full_matrices=False)
     p = S.numel()
-    r_top = min(r, p)
-    r_bot = min(r, p - r_top) if (2*r <= p) else min(r, max(0, p - r_top))
+
+    # Ensure we don't exceed the available rank
+    r_tail = min(r, p)
+    r_top = max(p - r_tail, 0)
+
+    # Split head/tail
     U_top, S_top, Vh_top = U[:, :r_top], S[:r_top], Vh[:r_top, :]
-    U_bot, S_bot, Vh_bot = U[:, p-r_bot:], S[p-r_bot:], Vh[p-r_bot:, :]
-    return (U_top, S_top, Vh_top), (U_bot, S_bot, Vh_bot)
+    U_tail, S_tail, Vh_tail = U[:, r_top:], S[r_top:], Vh[r_top:, :]
+
+    return (U_top, S_top, Vh_top), (U_tail, S_tail, Vh_tail)
+

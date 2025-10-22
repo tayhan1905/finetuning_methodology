@@ -32,12 +32,17 @@ logger = logging.getLogger()
 # ----------------------------
 def replace_qkv_with_adapter(model, r=8, mode="lora"):
     """
-    mode:
-      'lora' / 'dora' → PEFT LoRA (optionally DoRA)
-      'salt'          → custom SALT
-      'saltedora'     → custom SALT + EDoRA (BRA)
-      'saltedora_v2'  → custom SALT + EDoRA V2 (BDRA)
+    Replaces ONLY the query/key/value linear layers in BERT's attention modules
+    with the specified adapter type (LoRA, DoRA, SALT, SALT-EDoRA, SALT-EDoRA-V2).
+
+    Ensures the base model is frozen before replacement so that
+    trainable parameter counts remain comparable and small.
     """
+    # 1️⃣ Freeze everything first (crucial for fair comparison)
+    for p in model.parameters():
+        p.requires_grad = False
+
+    # 2️⃣ Handle LoRA / DoRA using PEFT
     if mode in ["lora", "dora"]:
         use_dora = (mode == "dora")
         config = LoraConfig(
@@ -48,16 +53,22 @@ def replace_qkv_with_adapter(model, r=8, mode="lora"):
         )
         return get_peft_model(model, config)
 
+    # 3️⃣ Custom adapters (SALT / SALT-EDoRA)
     for name, module in model.named_children():
-        if isinstance(module, nn.Linear) and ("query" in name or "key" in name or "value" in name):
+        # Only touch Q, K, V linears
+        if isinstance(module, nn.Linear) and any(k in name for k in ["query", "key", "value"]):
             if mode == "salt":
-                setattr(model, name, SALT(module, r_top=r))
+                setattr(model, name, SALT(module, r = r * 2, lora_rank=r))
             elif mode == "saltedora":
                 setattr(model, name, SALTEdoraLinear(module, r=r))
             elif mode == "saltedora_v2":
                 setattr(model, name, SALTEdoraLinearV2(module, r=r))
         else:
-            replace_qkv_with_adapter(module, r=r, mode=mode)
+            # Recurse only if the child has its own children
+            # (prevents repeated descent into leaf modules)
+            if len(list(module.children())) > 0:
+                replace_qkv_with_adapter(module, r=r, mode=mode)
+
     return model
 
 # ----------------------------
@@ -242,6 +253,7 @@ def train_and_evaluate(model, train_ds, val_ds, tokenizer, model_name, r, mode, 
 
     # Add metadata for this run
     results["trainable_params"] = count_trainable_params(model)
+    print(count_trainable_params(model))
     results["runtime_total_s"] = total_runtime
 
     # Save per-run summary JSON
@@ -249,7 +261,7 @@ def train_and_evaluate(model, train_ds, val_ds, tokenizer, model_name, r, mode, 
         json.dump(results, f, indent=4)
 
     print(f"🔹 Completed {mode} | {task_key} | r={r} | Accuracy={results.get('eval_accuracy', 'N/A'):.4f} | Runtime={total_runtime:.2f}s")
-
+    logger.info(f"🔹 Completed {mode} | {task_key} | r={r} | Accuracy={results.get('eval_accuracy', 'N/A'):.4f} | Runtime={total_runtime:.2f}s")
     return results
 
 # ----------------------------
@@ -259,7 +271,7 @@ if __name__ == "__main__":
     model_name = "bert-base-uncased"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    ranks = [4, 8, 16, 32, 64]
+    ranks = [8, 16, 32, 64, 128]
     modes = ["lora", "dora", "salt", "saltedora_v2"]
     datasets_to_run = list(TASKS.keys())
 
@@ -273,6 +285,7 @@ if __name__ == "__main__":
 
         base_model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=num_labels)
         model = replace_qkv_with_adapter(base_model, r=r, mode=mode)
+        # train_and_evaluate(model, train_ds, val_ds, tokenizer, model_name, r, mode, task_key, num_labels, problem_type, metrics_fn)
 
         results = train_and_evaluate(model, train_ds, val_ds, tokenizer, model_name, r, mode, task_key, num_labels, problem_type, metrics_fn)
 
