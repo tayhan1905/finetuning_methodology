@@ -254,7 +254,7 @@ def train_and_evaluate(model, train_ds, val_ds, tokenizer, model_name, r, mode, 
     # Add metadata for this run
     results["trainable_params"] = count_trainable_params(model)
     print(count_trainable_params(model))
-    logger.info(f"🔹 Completed {mode} | {task_key} | r={r} | Accuracy={results.get('eval_accuracy', 'N/A'):.4f} | Runtime={total_runtime:.2f}s")
+    logger.info(count_trainable_params(model))
     results["runtime_total_s"] = total_runtime
 
     # Save per-run summary JSON
