@@ -104,22 +104,23 @@ class SALTEdoraLinear(nn.Module):
             self.R = nn.Parameter(torch.randn(self.r_tail, self.r_tail, dtype=dtype, device=device) * 0.01)
 
     def forward(self, x):
-        parts = []
+        # Start from the frozen pretrained weights
+        W_tilde = self.base.weight
 
+        # SALT top adaptation
         if self.r_top > 0:
             delta_sigma_top = self.S_top * self.alpha + self.beta
             Sigma_top = torch.diag(F.relu(delta_sigma_top))
-            W_top = self.U_top @ Sigma_top @ self.Vh_top
-            parts.append(W_top)
+            W_top_delta = self.U_top @ Sigma_top @ self.Vh_top
+            W_tilde = W_tilde + W_top_delta
 
+        # EDoRA tail adaptation (BDRA-style)
         if self.r_tail > 0:
             B = self.U_tail @ torch.diag(self.S_tail)
             A = self.Vh_tail
             delta_tail = B @ self.R @ A
-            W_tail = (self.U_tail @ torch.diag(self.S_tail) @ self.Vh_tail) + delta_tail
-            parts.append(W_tail)
+            W_tilde = W_tilde + delta_tail
 
-        W_tilde = parts[0] if len(parts) == 1 else parts[0] + parts[1]
         return F.linear(x, W_tilde, self.base.bias)
 
 # ----------------------------
@@ -166,22 +167,22 @@ class SALTEdoraLinearV2(nn.Module):
                 self.R.add_(0.01 * torch.randn_like(self.R))
 
     def forward(self, x):
-        parts = []
+        # Start from frozen pretrained base weights
+        W_tilde = self.base.weight
 
+        # Apply SALT top adaptation
         if self.r_top > 0:
             delta_sigma_top = self.S_top * self.alpha + self.beta
             Sigma_top = torch.diag(F.relu(delta_sigma_top))
-            W_top = self.U_top @ Sigma_top @ self.Vh_top
-            parts.append(W_top)
+            W_top_delta = self.U_top @ Sigma_top @ self.Vh_top
+            W_tilde = W_tilde + W_top_delta
 
+        # Apply EDoRA tail adaptation
         if self.r_tail > 0:
-            W_tail_base = self.U_tail @ torch.diag(self.S_tail) @ self.Vh_tail
             B = self.U_tail @ torch.diag(self.S_tail)
             A = self.Vh_tail
             Dm = torch.diag(self.D)
             delta_tail = B @ Dm @ self.R @ A
-            W_tail = W_tail_base + delta_tail
-            parts.append(W_tail)
+            W_tilde = W_tilde + delta_tail
 
-        W_tilde = parts[0] if len(parts) == 1 else parts[0] + parts[1]
         return F.linear(x, W_tilde, self.base.bias)

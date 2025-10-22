@@ -223,7 +223,7 @@ def train_and_evaluate(model, train_ds, val_ds, tokenizer, model_name, r, mode, 
         learning_rate=5e-5,
         per_device_train_batch_size=16,
         per_device_eval_batch_size=64,
-        num_train_epochs=3,
+        num_train_epochs=5,
         weight_decay=0.01,
         logging_dir=os.path.join(output_dir, "logs"),
         logging_steps=10,
@@ -254,6 +254,7 @@ def train_and_evaluate(model, train_ds, val_ds, tokenizer, model_name, r, mode, 
     # Add metadata for this run
     results["trainable_params"] = count_trainable_params(model)
     print(count_trainable_params(model))
+    logger.info(f"🔹 Completed {mode} | {task_key} | r={r} | Accuracy={results.get('eval_accuracy', 'N/A'):.4f} | Runtime={total_runtime:.2f}s")
     results["runtime_total_s"] = total_runtime
 
     # Save per-run summary JSON
@@ -272,7 +273,8 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     ranks = [8, 16, 32, 64, 128]
-    modes = ["lora", "dora", "salt", "saltedora_v2"]
+    # modes = ["lora", "dora", "salt", "saltedora_v2"]
+    modes = ["saltedora_v2"]
     datasets_to_run = list(TASKS.keys())
 
     summary_rows = []
