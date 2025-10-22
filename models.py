@@ -157,7 +157,7 @@ class SALTEdoraLinearV2(nn.Module):
         self.r_top = S_top.numel()
         self.r_tail = S_tail.numel()
 
-        self.alpha = nn.Parameter(torch.zeros(self.r_top, dtype=dtype, device=device))
+        self.alpha = nn.Parameter(torch.ones(self.r_top, dtype=dtype, device=device))
         self.beta  = nn.Parameter(torch.zeros(self.r_top, dtype=dtype, device=device))
 
         if self.r_tail > 0:
@@ -168,14 +168,13 @@ class SALTEdoraLinearV2(nn.Module):
 
     def forward(self, x):
         # Start from frozen pretrained base weights
-        W_tilde = self.base.weight
+        W_tail = self.U_tail @ torch.diag(self.S_tail) @ self.Vh_tail
 
         # Apply SALT top adaptation
         if self.r_top > 0:
             delta_sigma_top = self.S_top * self.alpha + self.beta
             Sigma_top = torch.diag(F.relu(delta_sigma_top))
             W_top_delta = self.U_top @ Sigma_top @ self.Vh_top
-            W_tilde = W_tilde + W_top_delta
 
         # Apply EDoRA tail adaptation
         if self.r_tail > 0:
@@ -183,6 +182,8 @@ class SALTEdoraLinearV2(nn.Module):
             A = self.Vh_tail
             Dm = torch.diag(self.D)
             delta_tail = B @ Dm @ self.R @ A
-            W_tilde = W_tilde + delta_tail
+            W_tail = W_tail + delta_tail
+
+        W_tilde = W_tail + W_top_delta
 
         return F.linear(x, W_tilde, self.base.bias)
