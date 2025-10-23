@@ -180,7 +180,7 @@ class SALTEdoraLinearV2(nn.Module):
         if self.r_tail > 0:
             B = self.U_tail @ torch.diag(self.S_tail)
             A = self.Vh_tail
-            Dm = torch.diag(self.D)
+            Dm = torch.diag(F.relu(self.D))
             delta_tail = B @ Dm @ self.R @ A
             W_tail = W_tail + delta_tail
 
