@@ -17,7 +17,7 @@ import itertools
 import logging
 import time
 from peft import LoraConfig, get_peft_model
-from models import SALT, SALTEdoraLinear, SALTEdoraLinearV2
+from models import SALT, SALTEdoraLinear, SALTEdoraLinearV2, SALTEdoraLinearV3
 from utils.svd_utils import svd_head_tail, truncated_svd
 import argparse
 
@@ -63,6 +63,8 @@ def replace_qkv_with_adapter(model, r=8, mode="lora"):
                 setattr(model, name, SALTEdoraLinear(module, r=r))
             elif mode == "saltedora_v2":
                 setattr(model, name, SALTEdoraLinearV2(module, r=r))
+            elif mode == "saltedora_v3":
+                setattr(model, name, SALTEdoraLinearV3(module, r=r))
         else:
             # Recurse only if the child has its own children
             # (prevents repeated descent into leaf modules)
@@ -272,9 +274,9 @@ if __name__ == "__main__":
     model_name = "bert-base-uncased"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    ranks = [8, 16, 32, 64, 128]
-    # modes = ["lora", "dora", "salt", "saltedora_v2"]
-    modes = ["saltedora_v2"]
+    ranks = [8, 16, 32, 64]
+    modes = ["lora", "dora", "salt", "saltedora_v3"]
+    # modes = ["saltedora_v2"]
     datasets_to_run = list(TASKS.keys())
 
     summary_rows = []
