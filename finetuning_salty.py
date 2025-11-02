@@ -64,7 +64,7 @@ def replace_qkv_with_adapter(model, r=8, mode="lora"):
             elif mode == "saltedora_v2":
                 setattr(model, name, SALTEdoraLinearV2(module, r=r))
             elif mode == "saltedora_v3":
-                setattr(model, name, SALTEdoraLinearV3(module, r=r))
+                setattr(model, name, SALTEdoraLinearV3(module, r_intrinsic=r))
         else:
             # Recurse only if the child has its own children
             # (prevents repeated descent into leaf modules)
