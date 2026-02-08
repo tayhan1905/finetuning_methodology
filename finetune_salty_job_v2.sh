@@ -1,27 +1,42 @@
 #!/bin/bash
-#SBATCH --job-name=finetune-salty      # Job name
-#SBATCH --output=finetune-salty.out    # Standard output and error log
-#SBATCH --error=finetune-salty.err     # Standard error log
-#SBATCH --ntasks=1                     # Number of tasks (e.g., 1 task for a single node)
-#SBATCH --cpus-per-task=4              # Number of CPU cores per task
-#SBATCH --gres=gpu:nv:1                # Request 1 GPU of the 'nv' type (modify if necessary)
-#SBATCH -t 3-00:00:00                  # Sets the maximum job duration (3 days)
-#SBATCH --mem=16G                      # Memory per node (16 GB)
-#SBATCH --partition=gpu                # Specify the partition to run the job (if applicable)
+#SBATCH --job-name=finetune-salty
+#SBATCH --output=finetune-salty.out
+#SBATCH --error=finetune-salty.err
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --gres=gpu:1
+#SBATCH -t 3-00:00:00
+#SBATCH --mem=16G
+#SBATCH --partition=gpu-long
 
-# Load any required modules (e.g., CUDA, PyTorch, etc.)
-module load python/3.8.5
+set -euo pipefail
+
+# (Recommended) purge modules to avoid conflicts
+module purge
+
+# Load CUDA only if your cluster requires it for driver libraries
 module load cuda/11.1
 
-# Create a virtual environment (if needed)
-# python -m venv venv
-# source venv/bin/activate
+# Activate your venv (IMPORTANT)
+source /home/t/tayhan/Finetuning/finetuning_methodology/myenv/bin/activate
 
-# Install required dependencies if not already done (uncomment the next line if necessary)
-# pip install -r requirements.txt
+# Sanity checks: show python + torch + GPU visibility
+echo "=== Python being used ==="
+which python
+python -c "import sys; print(sys.version)"
 
-# Activate your Python environment (if you use one)
-# source venv/bin/activate
+echo "=== CUDA_VISIBLE_DEVICES ==="
+echo "${CUDA_VISIBLE_DEVICES:-<not set>}"
 
-# Run the Python script
+echo "=== Torch CUDA check ==="
+python -c "import torch; \
+print('torch:', torch.__version__); \
+print('torch.cuda.is_available:', torch.cuda.is_available()); \
+print('torch.cuda.device_count:', torch.cuda.device_count()); \
+print('torch.version.cuda:', torch.version.cuda)"
+
+echo "=== nvidia-smi ==="
+nvidia-smi
+
+# Run training
 python finetuning_salty_v2.py
