@@ -24,4 +24,4 @@ module load cuda/11.1
 # source venv/bin/activate
 
 # Run the Python script
-python finetuning_salty.py
+python finetuning_salty_v2.py

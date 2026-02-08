@@ -3,12 +3,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from utils.svd_utils import svd_head_tail
 
+# This is for adaptive eigen dispersion
 def choose_head_rank_by_eigen_dispersion(S: torch.Tensor,
                                          min_r: int = 1,
                                          max_r: int | None = None,
                                          energy_threshold: float = 0.90) -> int:
     S = S.detach().float().clamp_min(1e-12)
-    n = S.numel()
+    n = S.numel()  
     if n <= 2:
         return max(min_r, min(n, n - 1))
     if max_r is None:
@@ -36,7 +37,7 @@ class SALT(nn.Module):
         self.out_features = base_linear.out_features
         self.has_bias = base_linear.bias is not None
 
-        # Freeze pretrained base weights
+        # Freeze pretrained base weights + bias >> to be reused
         self.base.weight.requires_grad_(False)
         if self.has_bias:
             self.base.bias.requires_grad_(False)
@@ -49,7 +50,7 @@ class SALT(nn.Module):
         r_top = min(r, p)
         r_tail = p - r_top
 
-        # Split head/tail singular subspaces
+        # Split head/tail singular subspaces + save them as buffers so that they are not trained
         self.register_buffer("U_top",  U[:, :r_top])
         self.register_buffer("S_top",  S[:r_top])
         self.register_buffer("Vh_top", Vh[:r_top, :])
@@ -59,18 +60,18 @@ class SALT(nn.Module):
 
         dtype, device = self.base.weight.dtype, self.base.weight.device
 
-        # --- Top-r: spectral scale & shift ---
+        # scale and shift
         self.alpha = nn.Parameter(torch.ones(r_top, dtype=dtype, device=device))
         self.beta  = nn.Parameter(torch.zeros(r_top, dtype=dtype, device=device))
 
-        # --- Tail: low-rank LoRA update ---
+        # low-rank LoRA update
         self.X = nn.Parameter(torch.zeros(r_tail, lora_rank, dtype=dtype, device=device))
         self.Y = nn.Parameter(torch.zeros(lora_rank, r_tail, dtype=dtype, device=device))
         nn.init.normal_(self.X, std=0.01)
         nn.init.zeros_(self.Y)
 
     def forward(self, x):
-        # --- Top part: scale and shift dominant spectrum ---
+        # scale and shift with relu
         Sigma_top = torch.diag(F.relu(self.S_top * self.alpha + self.beta))
         W_top = self.U_top @ Sigma_top @ self.Vh_top
 
@@ -226,7 +227,8 @@ class SALTEdoraLinearV3(nn.Module):
                  r_intrinsic: int = 4,
                  min_r_top: int = 1,
                  max_r_top: int | None = None,
-                 r_top_override: int | None = None):
+                 r_top_override: int | None = None,
+                 energy_threshold: float = 0.9):
         super().__init__()
         assert isinstance(base_linear, nn.Linear)
         self.base = base_linear
@@ -246,7 +248,7 @@ class SALTEdoraLinearV3(nn.Module):
 
         # 1️⃣ Split by eigen dispersion (e.g., head=600, tail=400)
         if r_top_override is None:
-            r_top = choose_head_rank_by_eigen_dispersion(S, min_r_top, max_r_top)
+            r_top = choose_head_rank_by_eigen_dispersion(S, min_r_top, max_r_top, energy_threshold=energy_threshold)
         else:
             r_top = int(r_top_override)
         r_top = max(0, min(r_top, S.numel()))
