@@ -11,9 +11,6 @@
 
 set -euo pipefail
 
-# (Recommended) purge modules to avoid conflicts
-module purge
-
 # Load CUDA only if your cluster requires it for driver libraries
 module load cuda/11.1
 
