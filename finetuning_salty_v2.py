@@ -17,7 +17,7 @@ import itertools
 import logging
 import time
 from peft import LoraConfig, get_peft_model
-from models import SALT, SALTEdoraLinear, SALTEdoraLinearV2, SALTEdoraLinearV3
+from models import SALT, SALTEdoraLinear, SALTEdoraLinearV2, SALTEdoraLinearV3, SALTEdoraLinearV4
 from utils.svd_utils import svd_head_tail, truncated_svd
 import argparse
 
@@ -96,7 +96,7 @@ class WeightMatrixSaveCallback(TrainerCallback):
 def replace_qkv_with_adapter(model, r=8, mode="lora", energy_threshold: float | None = None):
     """
     Replaces ONLY the query/key/value linear layers in BERT's attention modules
-    with the specified adapter type (LoRA, DoRA, SALT, SALT-EDoRA, SALT-EDoRA-V2, SALT-EDoRA-V3).
+    with the specified adapter type (LoRA, DoRA, SALT, SALT-EDoRA, SALT-EDoRA-V2, SALT-EDoRA-V3, SALT-EDoRA-V4).
 
     Ensures the base model is frozen before replacement so that
     trainable parameter counts remain comparable and small.
@@ -133,6 +133,11 @@ def replace_qkv_with_adapter(model, r=8, mode="lora", energy_threshold: float | 
                     # ===================== [UPDATED] use passed energy_threshold, default=0.9 =====================
                     et = 0.9 if energy_threshold is None else float(energy_threshold)
                     setattr(parent, name, SALTEdoraLinearV3(module, r_intrinsic=r, energy_threshold=et))
+                elif mode == "saltedora_v4":
+                    # ===================== [UPDATED] use passed energy_threshold, default=0.9 =====================
+                    # TODO: Try to make this more elegant >> I use the override here to test out different patterns and see which one offers the best accuracy >> right now the metric gives about half, we should see whether we can attempt to make this btr
+                    et = 0.9 if energy_threshold is None else float(energy_threshold)
+                    setattr(parent, name, SALTEdoraLinearV4(module, r_intrinsic=r, r_top_override=et, energy_threshold=et))
             else:
                 if len(list(module.children())) > 0:
                     _recurse(module)
@@ -174,7 +179,6 @@ def load_task_dataset(task_key, tokenizer, model_name):
     train_ds = tokenized["train"]
     val_ds = tokenized["validation"]
     return train_ds, val_ds, cfg["num_labels"], cfg["problem_type"], cfg
-
 
 # ----------------------------
 # Metric builder
@@ -317,23 +321,23 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     dora_rank = 8
-    saltedora_v3_ranks = [8, 16, 32, 64]
+    saltedora_v4_ranks = [4, 8, 16, 32, 64, 80, 96, 112, 128, 160]
 
     # ===================== [NEW] energy threshold sweep =====================
-    energy_thresholds = [0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
+    energy_thresholds = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
     # ===================== [UPDATED] runs now include energy_threshold =====================
     runs = []
     runs.append((0, "full_ft", None))
     runs.append((dora_rank, "dora", None))
-    for r in saltedora_v3_ranks:
+    for r in saltedora_v4_ranks:
         for et in energy_thresholds:
-            runs.append((r, "saltedora_v3", et))
+            runs.append((r, "saltedora_v4", et))
 
     datasets_to_run = ["glue/sst2"]
 
     summary_rows = []
-    logger.info("Starting SST-2 experiments (Full FT vs DoRA vs SALTEDORA_V3 w/ energy-threshold sweep)...")
+    logger.info("Starting SST-2 experiments (Full FT vs DoRA vs SALTEDORA_V4 w/ energy-override sweep)...")
 
     # ===================== [UPDATED] unpack (r, mode, et) =====================
     for (r, mode, et), task_key in itertools.product(runs, datasets_to_run):
@@ -367,6 +371,6 @@ if __name__ == "__main__":
 
     summary_df = pd.DataFrame(summary_rows)
     os.makedirs("./results", exist_ok=True)
-    summary_df.to_csv("./results/summary_sst2_fullft_dora_saltedoraV3_energy_sweep.csv", index=False)
-    logger.info("Global summary saved to ./results/summary_sst2_fullft_dora_saltedoraV3_energy_sweep.csv")
+    summary_df.to_csv("./results/summary_sst2_fullft_dora_saltedoraV4_energy_sweep.csv", index=False)
+    logger.info("Global summary saved to ./results/summary_sst2_fullft_dora_saltedoraV4_energy_sweep.csv")
     print(summary_df)

@@ -308,6 +308,7 @@ class SALTEdoraLinearV3(nn.Module):
 
         # --- Tail reconstruction (low-energy base) ---
         if self.r_tail > 0:
+            # OK, we can change this, this can just be developed once or adopted >> can be done once and it should be good
             W_tail_base = self.U_tail @ torch.diag(self.S_tail) @ self.Vh_tail
         else:
             W_tail_base = torch.zeros_like(W_head)
@@ -326,160 +327,223 @@ class SALTEdoraLinearV3(nn.Module):
 
         return F.linear(x, W_eff, self.base.bias)
 
-# ======================================================
-# Version 4 — Adaptive eigen dispersion (dynamic split)
-# ======================================================
 class SALTEdoraLinearV4(nn.Module):
     """
-    SALT–EDoRA–V4 (Adaptive Dispersion):
-      * Starts from SVD of frozen base weight.
-      * Periodically re-evaluates head/tail split by eigen dispersion
-        using the CURRENT adapted singulars (SALT-updated head + frozen tail).
-      * Head: SALT (α, β) on top singulars.
-      * Tail: BDRA with user-chosen intrinsic rank r_intrinsic inside current tail.
+    W0 = U S V^T
+
+    Split:
+        W0 = U_top S_top V_top^T + U_tail S_tail V_tail^T
+
+    Learn:
+        W_eff =
+            U_top diag(σ_top) V_top^T
+          + U_tail diag(S_tail) V_tail^T
+          + (U_r diag(S_r)) diag(d) R V_r^T
+
+    Forward computes:
+        y = x W_eff^T + b
+
+    using factorization:
+        x (U S V^T)^T = ((x V) S) U^T
     """
 
-    def __init__(self, base_linear: nn.Linear,
-                 r_intrinsic: int = 4,
-                 min_r_top: int = 1,
-                 max_r_top: int | None = None,
-                 update_interval: int = 100,
-                 ema_momentum: float = 0.9):
+    def __init__(
+        self,
+        base_linear: nn.Linear,
+        r_intrinsic: int = 4,
+        min_r_top: int = 1,
+        max_r_top: int | None = None,
+        r_top_override: float | None = None,
+        energy_threshold: float = 0.9,
+    ):
         super().__init__()
-        assert isinstance(base_linear, nn.Linear)
+
         self.base = base_linear
         self.in_features = base_linear.in_features
         self.out_features = base_linear.out_features
         self.has_bias = base_linear.bias is not None
 
-        # Freeze pretrained backbone
+        # Freeze pretrained weights
         self.base.weight.requires_grad_(False)
         if self.has_bias:
             self.base.bias.requires_grad_(False)
 
-        # Base SVD
-        W = self.base.weight.detach().to(torch.float32)
-        U, S, Vh = torch.linalg.svd(W, full_matrices=False)
-        dtype, device = W.dtype, W.device
-        self.register_buffer("U_full", U.to(dtype).to(device))
-        self.register_buffer("S_full", S.to(dtype).to(device))
-        self.register_buffer("Vh_full", Vh.to(dtype).to(device))
+        # ============================================================
+        # SVD:
+        #     W0 = U S V^T
+        # ============================================================
+        W0 = self.base.weight.detach()
+        U, S, Vh = torch.linalg.svd(W0.to(torch.float32), full_matrices=False)
 
-        self.min_r_top = min_r_top
-        self.max_r_top = max_r_top or S.numel()
-        self.update_interval = update_interval
-        self.ema_momentum = float(ema_momentum)
-        self.register_buffer("step", torch.zeros(1, dtype=torch.long))
+        dtype = W0.dtype
+        device = W0.device
 
-        # Initial split (static heuristic on base S just once at init)
-        self.r_top = choose_head_rank_by_eigen_dispersion(S, min_r_top, max_r_top)
-        self.r_intrinsic = min(r_intrinsic, S.numel() - self.r_top)
+        k = int(S.numel())
 
-        # Initialize subspaces & params
-        self._initialize_subspaces(dtype, device)
-
-        # Initialize EMA spectrum buffer with the current adapted spectrum
-        with torch.no_grad():
-            S_head_adapted = (self.S_top * torch.ones_like(self.S_top) + torch.zeros_like(self.S_top)).clamp_min(0)
-            S_current = torch.cat([S_head_adapted, self.S_tail])
-            self.register_buffer("S_est", S_current.clone())
-
-    # --------------------------
-    # Helper to initialize / resize parameters
-    # --------------------------
-    def _initialize_subspaces(self, dtype, device):
-        k = self.S_full.numel()
-        r_top, r_tail = self.r_top, k - self.r_top
-        U, S, Vh = self.U_full, self.S_full, self.Vh_full
-
-        # SVD slices
-        self.register_buffer("U_top",  U[:, :r_top].to(dtype).to(device))
-        self.register_buffer("S_top",  S[:r_top].to(dtype).to(device))
-        self.register_buffer("Vh_top", Vh[:r_top, :].to(dtype).to(device))
-        self.register_buffer("U_tail",  U[:, r_top:].to(dtype).to(device))
-        self.register_buffer("S_tail",  S[r_top:].to(dtype).to(device))
-        self.register_buffer("Vh_tail", Vh[r_top:, :].to(dtype).to(device))
-
-        # Intrinsic tail rank compression
-        self.r_intrinsic = min(self.r_intrinsic, r_tail)
-        self.register_buffer("U_tail_r",  self.U_tail[:, :self.r_intrinsic].to(dtype).to(device))
-        self.register_buffer("S_tail_r",  self.S_tail[:self.r_intrinsic].to(dtype).to(device))
-        self.register_buffer("Vh_tail_r", self.Vh_tail[:self.r_intrinsic, :].to(dtype).to(device))
-
-        # SALT params
-        self.alpha = nn.Parameter(torch.ones(r_top, dtype=dtype, device=device))
-        self.beta  = nn.Parameter(torch.zeros(r_top, dtype=dtype, device=device))
-
-        # BDRA params
-        self.D = nn.Parameter(torch.ones(self.r_intrinsic, dtype=dtype, device=device))
-        R0 = torch.eye(self.r_intrinsic, dtype=dtype, device=device)
-        R0 = R0 + 0.01 * torch.randn_like(R0)
-        self.R = nn.Parameter(R0)
-
-    # --------------------------
-    # Periodic adaptive update (uses LIVE adapted singulars + EMA)
-    # --------------------------
-    def maybe_update_split(self):
-        self.step += 1
-        if self.step % self.update_interval != 0:
-            return
-
-        with torch.no_grad():
-            # === 1️⃣ Compute current spectrum ===
-            S_head_adapted = (self.S_top * self.alpha + self.beta).clamp_min(0)
-
-            # Tail: combine BDRA-adapted subspace and untouched remainder
-            S_tail_adapted = torch.cat([
-                (self.S_tail_r * F.relu(self.D)),  # adapted intrinsic tail
-                self.S_tail[self.r_intrinsic:]     # remaining unmodified tail singulars
-            ])
-
-            S_current = torch.cat([S_head_adapted, S_tail_adapted])
-
-            # === 2️⃣ EMA smoothing ===
-            m = self.ema_momentum
-            self.S_est.mul_(m).add_((1.0 - m) * S_current)
-
-            # === 3️⃣ Re-evaluate eigen dispersion ===
-            new_r_top = choose_head_rank_by_eigen_dispersion(
-                self.S_est, self.min_r_top, self.max_r_top
+        # Head rank selection
+        if r_top_override is None:
+            r_top = choose_head_rank_by_eigen_dispersion(
+                S, min_r_top, max_r_top, energy_threshold=energy_threshold
             )
+        else:
+            p = float(r_top_override)      
+            p = max(0.0, min(1.0, p))             
+            r_top = int(round(p * k)) 
 
-            # === 4️⃣ Rebuild if boundary moves ===
-            if int(new_r_top) != int(self.r_top):
-                print(f"[Adaptive Split] r_top {self.r_top} → {int(new_r_top)}")
-                self.r_top = int(new_r_top)
-                dtype, device = self.S_full.dtype, self.S_full.device
-                self._initialize_subspaces(dtype, device)
+        r_top = max(0, min(int(r_top), S.numel()))
+        r_tail = S.numel() - r_top
 
-                # Reset EMA with updated shapes
-                S_head_adapted = (self.S_top * self.alpha + self.beta).clamp_min(0)
-                S_tail_adapted = torch.cat([
-                    (self.S_tail_r * F.relu(self.D)),
-                    self.S_tail[self.r_intrinsic:]
-                ])
-                self.S_est = torch.cat([S_head_adapted, S_tail_adapted]).detach()
+        self.r_top = r_top
+        self.r_tail = r_tail
 
+        # Split:
+        #     W0 = U_top S_top V_top^T + U_tail S_tail V_tail^T
+        U_top  = U[:, :r_top]
+        S_top  = S[:r_top]
+        Vh_top = Vh[:r_top, :]
 
-    # --------------------------
-    # Forward
-    # --------------------------
+        U_tail  = U[:, r_top:]
+        S_tail  = S[r_top:]
+        Vh_tail = Vh[r_top:, :]
+
+        # Intrinsic tail rank
+        self.r_intrinsic = min(r_intrinsic, r_tail)
+
+        U_tail_r  = U_tail[:, :self.r_intrinsic]
+        S_tail_r  = S_tail[:self.r_intrinsic]
+        Vh_tail_r = Vh_tail[:self.r_intrinsic, :]
+
+        # Register SVD factors as buffers
+        self.register_buffer("U_top",  U_top.to(dtype).to(device))
+        self.register_buffer("S_top",  S_top.to(dtype).to(device))
+        self.register_buffer("Vh_top", Vh_top.to(dtype).to(device))
+
+        self.register_buffer("U_tail",  U_tail.to(dtype).to(device))
+        self.register_buffer("S_tail",  S_tail.to(dtype).to(device))
+        self.register_buffer("Vh_tail", Vh_tail.to(dtype).to(device))
+
+        self.register_buffer("U_tail_r",  U_tail_r.to(dtype).to(device))
+        self.register_buffer("S_tail_r",  S_tail_r.to(dtype).to(device))
+        self.register_buffer("Vh_tail_r", Vh_tail_r.to(dtype).to(device))
+
+        # ============================================================
+        # SALT head:
+        #     σ_top = ReLU(S_top * α + β)
+        # ============================================================
+        if self.r_top > 0:
+            self.alpha = nn.Parameter(torch.ones(self.r_top, dtype=dtype, device=device))
+            self.beta  = nn.Parameter(torch.zeros(self.r_top, dtype=dtype, device=device))
+        else:
+            self.register_buffer("alpha", torch.zeros(0, dtype=dtype, device=device))
+            self.register_buffer("beta",  torch.zeros(0, dtype=dtype, device=device))
+
+        # ============================================================
+        # Intrinsic tail update:
+        #
+        # Δ_tail = (U_r diag(S_r)) diag(d) R V_r^T
+        #
+        # Initialize d = 0 → Δ_tail = 0 at start
+        # ============================================================
+        if self.r_intrinsic > 0:
+            self.D = nn.Parameter(torch.zeros(self.r_intrinsic, dtype=dtype, device=device))
+            R0 = torch.eye(self.r_intrinsic, dtype=dtype, device=device)
+            R0 += 0.01 * torch.randn_like(R0)
+            self.R = nn.Parameter(R0)
+        else:
+            self.register_buffer("D", torch.zeros(0, dtype=dtype, device=device))
+            self.register_buffer("R", torch.zeros(0, 0, dtype=dtype, device=device))
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        self.maybe_update_split()
 
-        # === SALT head ===
-        delta_sigma_top = self.S_top * self.alpha + self.beta
-        Sigma_top = torch.diag(F.relu(delta_sigma_top))
-        W_head = self.U_top @ Sigma_top @ self.Vh_top
+        # We compute:
+        #
+        #     y = x W_eff^T + b
+        #
+        # without building W_eff explicitly.
 
-        # === Base tail ===
-        W_tail_base = self.U_tail @ torch.diag(self.S_tail) @ self.Vh_tail
+        y = 0.0
 
-        # === BDRA intrinsic tail ===
-        B = self.U_tail_r @ torch.diag(self.S_tail_r)
-        A = self.Vh_tail_r
-        Dm = torch.diag(F.relu(self.D))
-        delta_tail = B @ Dm @ self.R @ A
+        # ============================================================
+        # (1) HEAD TERM
+        #
+        # W_head = U_top diag(σ_top) V_top^T
+        #
+        # x W_head^T
+        # = x (V_top diag(σ_top) U_top^T)
+        # = ((x V_top) diag(σ_top)) U_top^T
+        # ============================================================
 
-        W_eff = W_head + W_tail_base + delta_tail
-        return F.linear(x, W_eff, self.base.bias)
+        if self.r_top > 0:
+
+            sigma = F.relu(self.S_top * self.alpha + self.beta)
+            # σ_top = ReLU(S_top * α + β)
+
+            t1 = x @ self.Vh_top.transpose(-1, -2)
+            # t1 = x V_top
+
+            t2 = t1 * sigma
+            # t2 = t1 diag(σ_top)
+
+            y = y + (t2 @ self.U_top.transpose(-1, -2))
+            # y_head = t2 U_top^T
+
+
+        # ============================================================
+        # (2) TAIL BASE TERM
+        #
+        # W_tail_base = U_tail diag(S_tail) V_tail^T
+        #
+        # x W_tail_base^T
+        # = ((x V_tail) diag(S_tail)) U_tail^T
+        # ============================================================
+
+        if self.r_tail > 0:
+
+            t1 = x @ self.Vh_tail.transpose(-1, -2)
+            # t1 = x V_tail
+
+            t2 = t1 * self.S_tail
+            # t2 = t1 diag(S_tail)
+
+            y = y + (t2 @ self.U_tail.transpose(-1, -2))
+            # y_tail_base = t2 U_tail^T
+
+
+        # ============================================================
+        # (3) INTRINSIC TAIL DELTA
+        #
+        # Δ_tail = (U_r diag(S_r)) diag(d) R V_r^T
+        #
+        # Δ_tail^T = V_r R^T diag(d) diag(S_r) U_r^T
+        #
+        # x Δ_tail^T
+        # = (((x V_r) R^T) diag(d) diag(S_r)) U_r^T
+        # ============================================================
+
+        if self.r_intrinsic > 0:
+
+            d = F.relu(self.D)
+            # d = ReLU(D)
+
+            t1 = x @ self.Vh_tail_r.transpose(-1, -2)
+            # t1 = x V_r
+
+            t2 = t1 @ self.R.transpose(-1, -2)
+            # t2 = (x V_r) R^T
+
+            t3 = t2 * d
+            # t3 = t2 diag(d)
+
+            t4 = t3 * self.S_tail_r
+            # t4 = t3 diag(S_r)
+
+            y = y + (t4 @ self.U_tail_r.transpose(-1, -2))
+            # y_delta = t4 U_r^T
+
+
+        # Add bias once:
+        # y = x W_eff^T + b
+        if self.has_bias:
+            y = y + self.base.bias
+
+        return y
