@@ -312,7 +312,6 @@ def train_and_evaluate(
     logger.info(f"🔹 Completed {mode} | {task_key} | r={r} | et={et_tag} | Accuracy={results.get('eval_accuracy', 'N/A'):.4f} | Runtime={total_runtime:.2f}s")
     return results
 
-
 # ----------------------------
 # Main experiment runner
 # ----------------------------

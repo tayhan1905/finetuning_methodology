@@ -1,20 +1,27 @@
 #!/bin/bash
-#SBATCH --job-name=finetune-salty
-#SBATCH --output=finetune-salty.out
-#SBATCH --error=finetune-salty.err
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --gres=gpu:1
-#SBATCH -t 3-00:00:00
-#SBATCH --mem=16G
-#SBATCH --partition=gpu-long
+#SBATCH --job-name=finetune-salty      # Job name
+#SBATCH --output=finetune-salty.out    # Standard output and error log
+#SBATCH --error=finetune-salty.err     # Standard error log
+#SBATCH --ntasks=1                     # Number of tasks (e.g., 1 task for a single node)
+#SBATCH --cpus-per-task=4              # Number of CPU cores per task
+#SBATCH --gres=gpu:nv:1                # Request 1 GPU of the 'nv' type (modify if necessary)
+#SBATCH -t 3-00:00:00                  # Sets the maximum job duration (3 days)
+#SBATCH --mem=16G                      # Memory per node (16 GB)
+#SBATCH --partition=gpu                # Specify the partition to run the job (if applicable)
 
-set -euo pipefail
+# Load any required modules (e.g., CUDA, PyTorch, etc.)
+module load python/3.8.5
+module load cuda/11.1
 
-source /home/t/tayhan/Finetuning/finetuning_methodology/myenv/bin/activate
+# Create a virtual environment (if needed)
+# python -m venv venv
+# source venv/bin/activate
 
-echo "Python:" $(which python)
-python -c "import torch; print('cuda avail:', torch.cuda.is_available()); print('count:', torch.cuda.device_count()); print('torch cuda:', torch.version.cuda)"
-nvidia-smi
+# Install required dependencies if not already done (uncomment the next line if necessary)
+# pip install -r requirements.txt
 
+# Activate your Python environment (if you use one)
+# source venv/bin/activate
+
+# Run the Python script
 python finetuning_salty_v2.py
