@@ -15,13 +15,15 @@
 # Saves per-epoch QKV weights and runs principal-angles analysis for each task.
 #
 # Results land in:
-#   results/bert-base-uncased/<mode>/r_8/et_0.90/<task>/
-#   results/principal_angles/v3/<task>/
-#   results/summary_v3_dataset_sweep.csv
+#   results_v3/bert-base-uncased/<mode>/r_8/et_0.90/<task>/
+#   results_v3/principal_angles/v3/<task>/
+#   results_v3/summary_v3_dataset_sweep.csv
 # ---------------------------------------------------------------------------
 
 # Create logs dir if it doesn't exist
 mkdir -p logs
+mkdir -p results_v3/bert-base-uncased
+mkdir -p results_v3/principal_angles/v3
 
 # Load required modules (adjust versions to your cluster)
 module load python/3.10

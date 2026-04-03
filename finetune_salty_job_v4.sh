@@ -21,17 +21,20 @@
 #   all      — 180 runs, extend walltime to 7-00:00:00 if using this
 #
 # Results land in:
-#   results/bert-base-uncased/saltedora_v4/lr_<lr>/r_<r>/wd_<wd>/bs_<bs>/glue_sst2/
-#   results/bert-base-uncased/full_ft/reference/glue_sst2/
-#   results/principal_angles/v4/hp_<tag>/
-#   results/summary_v4_hp_tuning_<sweep>.csv
+#   results_v4/bert-base-uncased/saltedora_v4/lr_<lr>/r_<r>/wd_<wd>/bs_<bs>/glue_sst2/
+#   results_v4/bert-base-uncased/full_ft/reference/glue_sst2/
+#   results_v4/principal_angles/v4/hp_<tag>/
+#   results_v4/summary_v4_hp_tuning_<sweep>.csv
 # ---------------------------------------------------------------------------
 
 # Set the sweep type here: lr_rank | wd_bs | all
 SWEEP=${1:-lr_rank}
 
-# Create logs dir if it doesn't exist
+# Create logs and results_v4 dirs if they don't exist
 mkdir -p logs
+mkdir -p results_v4/bert-base-uncased/saltedora_v4
+mkdir -p results_v4/bert-base-uncased/full_ft/reference
+mkdir -p results_v4/principal_angles/v4
 
 # Load required modules (adjust versions to your cluster)
 module load python/3.10
