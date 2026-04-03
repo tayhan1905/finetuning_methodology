@@ -103,7 +103,7 @@ DEFAULT_BS       = 16
 
 # HP grids
 LR_GRID          = [1e-5, 3e-5, 5e-5, 1e-4]
-RANK_GRID        = [4, 8, 16, 32, 64]
+RANK_GRID        = [16, 32, 64, 128]
 WD_GRID          = [0.001, 0.01, 0.1]
 BS_GRID          = [8, 16, 32]
 
