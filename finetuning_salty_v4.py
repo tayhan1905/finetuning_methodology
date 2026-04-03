@@ -312,7 +312,7 @@ def train_and_evaluate(
         per_device_eval_batch_size  = EVAL_BS,
         num_train_epochs            = NUM_EPOCHS,
         weight_decay                = wd,
-        evaluation_strategy         = "epoch",
+        # evaluation_strategy         = "epoch",
         save_strategy               = "no",
         logging_dir                 = os.path.join(output_dir, "logs"),
         logging_steps               = 10,
