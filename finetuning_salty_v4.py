@@ -290,9 +290,9 @@ class TrackingCallback(TrainerCallback):
 def _make_output_dir(mode: str, lr: float, r: int, wd: float, bs: int) -> str:
     lr_str = f"{lr:.0e}".replace("-0", "-").replace("+0", "")
     if mode == "full_ft":
-        return f"./results/{MODEL_NAME}/full_ft/reference/glue_sst2"
+        return f"./results_v4/{MODEL_NAME}/full_ft/reference/glue_sst2"
     return (
-        f"./results/{MODEL_NAME}/saltedora_v4"
+        f"./results_v4/{MODEL_NAME}/saltedora_v4"
         f"/lr_{lr_str}/r_{r}/wd_{wd}/bs_{bs}/glue_sst2"
     )
 
@@ -703,7 +703,7 @@ if __name__ == "__main__":
         # -------------------------------------------------------------------
         # Principal angles: this SALTEDORA config vs full_ft reference
         # -------------------------------------------------------------------
-        pa_out = f"./results/principal_angles/v4/hp_{hp_tag}"
+        pa_out = f"./results_v4/principal_angles/v4/hp_{hp_tag}"
         logger.info(f"  📐 Principal angles analysis …")
         analyze_principal_angles(
             saltedora_dir = salty_dir,
@@ -715,9 +715,9 @@ if __name__ == "__main__":
     # -----------------------------------------------------------------------
     # Global summary
     # -----------------------------------------------------------------------
-    os.makedirs("./results", exist_ok=True)
+    os.makedirs("./results_v4", exist_ok=True)
     summary_df = pd.DataFrame(summary_rows)
-    out_csv    = f"./results/summary_v4_hp_tuning_{args_cli.sweep}.csv"
+    out_csv    = f"./results_v4/summary_v4_hp_tuning_{args_cli.sweep}.csv"
     summary_df.to_csv(out_csv, index=False)
     logger.info(f"\n✅ Global summary → {out_csv}")
     print(summary_df.sort_values("accuracy", ascending=False).to_string(index=False))

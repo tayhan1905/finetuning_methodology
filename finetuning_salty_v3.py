@@ -309,7 +309,7 @@ def train_and_evaluate(
 ):
     safe_task  = task_key.replace("/", "_")
     et_tag     = "na" if energy_threshold is None else f"{float(energy_threshold):.2f}"
-    output_dir = f"./results/{model_name}/{mode}/r_{r}/et_{et_tag}/{safe_task}"
+    output_dir = f"./results_v3/{model_name}/{mode}/r_{r}/et_{et_tag}/{safe_task}"
     os.makedirs(output_dir, exist_ok=True)
 
     args = TrainingArguments(
@@ -677,7 +677,7 @@ if __name__ == "__main__":
         # ---------------------------------------------------------------
         if "full_ft" in run_dirs and "saltedora_v4" in run_dirs:
             safe_task = task_key.replace("/", "_")
-            pa_out    = f"./results/principal_angles/v3/{safe_task}"
+            pa_out    = f"./results_v3/principal_angles/v3/{safe_task}"
             logger.info(f"\n📐 Principal angles analysis for {task_key} …")
             analyze_principal_angles(
                 saltedora_dir = run_dirs["saltedora_v4"],
@@ -689,8 +689,8 @@ if __name__ == "__main__":
     # -----------------------------------------------------------------------
     # Global summary CSV
     # -----------------------------------------------------------------------
-    os.makedirs("./results", exist_ok=True)
+    os.makedirs("./results_v3", exist_ok=True)
     summary_df = pd.DataFrame(summary_rows)
-    summary_df.to_csv("./results/summary_v3_dataset_sweep.csv", index=False)
-    logger.info("\n✅ Global summary → ./results/summary_v3_dataset_sweep.csv")
+    summary_df.to_csv("./results_v3/summary_v3_dataset_sweep.csv", index=False)
+    logger.info("\n✅ Global summary → ./results_v3/summary_v3_dataset_sweep.csv")
     print(summary_df.to_string(index=False))
