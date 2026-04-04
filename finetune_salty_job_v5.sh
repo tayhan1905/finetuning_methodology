@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1                            # Single task
 #SBATCH --cpus-per-task=4                     # CPU cores per task
 #SBATCH --gres=gpu:nv:1                       # 1 GPU  (change to a100-40, h100-47, etc.)
-#SBATCH -t 0-12:00:00                         # Max walltime: 12 hours (60 runs on SST-2 only)
+#SBATCH -t 3-00:00:00                         
 #SBATCH --mem=16G                             # Memory — SST-2 only, 16G is sufficient
 #SBATCH --partition=gpu                       # GPU partition
 
