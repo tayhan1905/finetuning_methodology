@@ -5,25 +5,30 @@
 #SBATCH --ntasks=1                            # Single task
 #SBATCH --cpus-per-task=4                     # CPU cores per task
 #SBATCH --gres=gpu:nv:1                       # 1 GPU  (change to a100-40, h100-47, etc.)
-#SBATCH -t 3-00:00:00                         # Max walltime: 3 days (QNLI is large)
-#SBATCH --mem=32G                             # Memory — bumped to 32G for 3-dataset sweep
+#SBATCH -t 2-00:00:00                         # Max walltime: 2 days (80 runs across 4 datasets)
+#SBATCH --mem=32G                             # Memory — 32G to handle MNLI (~393K examples)
 #SBATCH --partition=gpu                       # GPU partition
 
 # ---------------------------------------------------------------------------
-# finetuning_salty_v3.py — Dataset Sweep
-# Trains SALTEDORA-V4 + full-FT on SST-2, RTE, and QNLI.
-# Saves per-epoch QKV weights and runs principal-angles analysis for each task.
+# finetuning_salty_v3.py — Performance Comparison Across Datasets
+#
+# Benchmarks 4 adapter methods across 4 GLUE datasets, 5 ranks = 80 total runs.
+#
+# Methods : LoRA | DoRA | SALT | SALTEdoraLinearV4 (eigen dispersion)
+# Datasets: SST-2 | RTE | QNLI | MNLI
+# Ranks   : 8, 16, 32, 64, 128
+#
+# No weight matrices are saved — optimised for speed.
+# Outputs : accuracy, eval_loss, runtime, trainable params per run.
 #
 # Results land in:
-#   results_v3/bert-base-uncased/<mode>/r_8/et_0.90/<task>/
-#   results_v3/principal_angles/v3/<task>/
-#   results_v3/summary_v3_dataset_sweep.csv
+#   results_v3/bert-base-uncased/<mode>/r_<r>/<task>/
+#   results_v3/summary_v3_performance_comparison.csv
 # ---------------------------------------------------------------------------
 
-# Create logs dir if it doesn't exist
+# Create required directories
 mkdir -p logs
 mkdir -p results_v3/bert-base-uncased
-mkdir -p results_v3/principal_angles/v3
 
 # Load required modules (adjust versions to your cluster)
 module load python/3.10
@@ -36,5 +41,5 @@ module load cuda/12.1
 # Install dependencies if needed (uncomment on first run)
 # pip install -r requirements.txt
 
-# Run the dataset sweep script
+# Run the performance comparison script
 srun python finetuning_salty_v3.py
