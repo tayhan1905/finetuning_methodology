@@ -76,8 +76,8 @@ TASK_KEY         = "glue/sst2"
 NUM_EPOCHS       = 5
 TRAIN_BS         = 16          # fixed — not swept to keep run count manageable
 EVAL_BS          = 64
-MIN_FRAC = 0.10   # head gets at least 10% of singular values
-MAX_FRAC = 0.60   # head gets at most 60% of singular values
+MIN_FRAC = 0.50   # head gets at least 10% of singular values
+MAX_FRAC = 0.90   # head gets at most 60% of singular values
 
 # ---------------------------------------------------------------------------
 # Hyperparameter grids

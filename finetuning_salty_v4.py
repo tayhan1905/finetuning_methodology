@@ -176,7 +176,7 @@ def replace_qkv_with_adapter(model, r=8, mode="saltedora_v4",
                     # knee method with default bounds [10%, 60%].
                     setattr(parent, name, SALTEdoraLinearV4(
                         module, r_intrinsic=r, r_top_override=None,
-                        min_frac=0.10, max_frac=0.60))
+                        min_frac=0.50, max_frac=0.90))
             elif len(list(module.children())) > 0:
                 _recurse(module)
 

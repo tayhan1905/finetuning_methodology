@@ -393,4 +393,4 @@ if __name__ == "__main__":
     os.makedirs("./results", exist_ok=True)
     summary_df.to_csv("./results/summary_sst2_fullft_dora_saltedoraV4_energy_sweep.csv", index=False)
     logger.info("Global summary saved to ./results/summary_sst2_fullft_dora_saltedoraV4_energy_sweep.csv")
-    print(summary_d
+    print(summary_df)

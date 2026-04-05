@@ -79,8 +79,8 @@ RANKS        = [8, 16, 32, 64, 128]
 MODE         = "saltedora_v4"
 
 # Head/tail split bounds for cumulative energy knee (SALTEdoraLinearV4)
-MIN_FRAC = 0.10   # head gets at least 10% of singular values
-MAX_FRAC = 0.50   # head gets at most 50% — tighter ceiling than v3/v5 (0.60)
+MIN_FRAC = 0.50   
+MAX_FRAC = 0.90   
 
 
 # ===========================================================================
