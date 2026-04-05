@@ -279,8 +279,8 @@ class SALTEdoraLinearV3(nn.Module):
                  max_r_top: int | None = None,
                  r_top_override: int | None = None,
                  energy_threshold: float = 0.9,
-                 min_frac: float = 0.10,
-                 max_frac: float = 0.60):
+                 min_frac: float = 0.40,
+                 max_frac: float = 0.90):
         super().__init__()
         assert isinstance(base_linear, nn.Linear)
         self.base = base_linear
@@ -407,8 +407,8 @@ class SALTEdoraLinearV4(nn.Module):
         max_r_top: int | None = None,
         r_top_override: float | None = None,
         energy_threshold: float = 0.9,
-        min_frac: float = 0.10,
-        max_frac: float = 0.60,
+        min_frac: float = 0.40,
+        max_frac: float = 0.90,
     ):
         super().__init__()
 

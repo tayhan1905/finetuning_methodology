@@ -287,7 +287,6 @@ def train_and_evaluate(
     results["trainable_params"]   = n_trainable
     results["runtime_total_s"]    = total_runtime
     results["rank"]               = r
-    results["energy_threshold"]   = ENERGY_THRESHOLD
     results["task"]               = task_key
 
     with open(os.path.join(output_dir, "results.json"), "w") as f:
@@ -349,7 +348,6 @@ if __name__ == "__main__":
                 "task":             task_key,
                 "mode":             MODE,
                 "rank":             r,
-                "energy_threshold": ENERGY_THRESHOLD,
                 "accuracy":         results.get("eval_accuracy"),
                 "eval_loss":        results.get("eval_loss"),
                 "runtime_s":        results.get("runtime_total_s"),
