@@ -314,10 +314,11 @@ def train_and_evaluate(model, train_ds, val_ds, tokenizer, metrics_fn,
         json.dump(results, f, indent=4)
 
     acc = results.get("eval_accuracy", "N/A")
+    acc_str = f"{acc:.4f}" if isinstance(acc, float) else str(acc)
     cut_str = f"cut={r_top_override:.1f}" if r_top_override is not None else "full_ft"
     logger.info(
         f"  ✓ {cut_str} | r={RANK if mode != 'full_ft' else '-'} | "
-        f"acc={acc:.4f if isinstance(acc, float) else acc} | "
+        f"acc={acc_str} | "
         f"params={results['trainable_params']:,} | {results['runtime_total_s']:.0f}s"
     )
     return results
