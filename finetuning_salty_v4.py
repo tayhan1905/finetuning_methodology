@@ -172,9 +172,11 @@ def replace_qkv_with_adapter(model, r=8, mode="saltedora_v4",
                     et = 0.9 if energy_threshold is None else float(energy_threshold)
                     setattr(parent, name, SALTEdoraLinearV3(module, r_intrinsic=r, energy_threshold=et))
                 elif mode == "saltedora_v4":
-                    et = 0.9 if energy_threshold is None else float(energy_threshold)
+                    # Cumulative energy knee: r_top_override=None activates the
+                    # knee method with default bounds [10%, 60%].
                     setattr(parent, name, SALTEdoraLinearV4(
-                        module, r_intrinsic=r, r_top_override=None, energy_threshold=et))
+                        module, r_intrinsic=r, r_top_override=None,
+                        min_frac=0.10, max_frac=0.60))
             elif len(list(module.children())) > 0:
                 _recurse(module)
 

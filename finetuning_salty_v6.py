@@ -78,8 +78,9 @@ EVAL_BS      = 64
 RANKS        = [8, 16, 32, 64, 128]
 MODE         = "saltedora_v4"
 
-# Eigen-dispersion fallback threshold — tighter budget than v3 (0.9)
-ENERGY_THRESHOLD = 0.8
+# Head/tail split bounds for cumulative energy knee (SALTEdoraLinearV4)
+MIN_FRAC = 0.10   # head gets at least 10% of singular values
+MAX_FRAC = 0.50   # head gets at most 50% — tighter ceiling than v3/v5 (0.60)
 
 
 # ===========================================================================
@@ -164,10 +165,9 @@ def replace_qkv_with_adapter(model, r: int):
     """
     Freeze the base model then inject SALTEdoraLinearV4 into every Q/K/V layer.
 
-    r_top_override=None  →  eigen dispersion determines the head/tail split
-                            automatically from the log-singular-value curvature.
-    energy_threshold=0.8 →  fallback threshold used only when the curvature
-                            signal is too weak to pick a clear boundary.
+    r_top_override=None  →  cumulative energy knee determines the head/tail split.
+    min_frac=0.10        →  head gets at least 10% of singular values.
+    max_frac=0.50        →  head gets at most 50% (tighter ceiling vs v3/v5).
     """
     for p in model.parameters():
         p.requires_grad = False
@@ -178,8 +178,9 @@ def replace_qkv_with_adapter(model, r: int):
                 setattr(parent, name, SALTEdoraLinearV4(
                     module,
                     r_intrinsic      = r,
-                    r_top_override   = None,          # eigen dispersion
-                    energy_threshold = ENERGY_THRESHOLD,
+                                    r_top_override = None,    # ← cumulative energy knee
+                    min_frac       = MIN_FRAC,
+                    max_frac       = MAX_FRAC,
                 ))
             elif len(list(module.children())) > 0:
                 _recurse(module)

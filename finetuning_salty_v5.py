@@ -76,7 +76,8 @@ TASK_KEY         = "glue/sst2"
 NUM_EPOCHS       = 5
 TRAIN_BS         = 16          # fixed — not swept to keep run count manageable
 EVAL_BS          = 64
-ENERGY_THRESHOLD = 0.9         # eigen-dispersion fallback only
+MIN_FRAC = 0.10   # head gets at least 10% of singular values
+MAX_FRAC = 0.60   # head gets at most 60% of singular values
 
 # ---------------------------------------------------------------------------
 # Hyperparameter grids
@@ -128,7 +129,8 @@ def replace_qkv_with_adapter(model, r: int, mode: str):
     Freeze the base model then inject the chosen adapter into every Q/K/V layer.
 
     For SALTEdoraLinearV4:
-        r_top_override=None  →  eigen dispersion determines the head/tail split.
+        r_top_override=None  →  cumulative energy knee determines the head/tail split.
+        min_frac/max_frac    →  clamp the knee result to [10%, 60%] of singular values.
         r_intrinsic=r        →  controls the intrinsic rank of the tail update.
     """
     if mode == "full_ft":
@@ -154,9 +156,10 @@ def replace_qkv_with_adapter(model, r: int, mode: str):
                 if mode == "saltedora_v4":
                     setattr(parent, name, SALTEdoraLinearV4(
                         module,
-                        r_intrinsic      = r,
-                        r_top_override   = None,       # ← eigen dispersion
-                        energy_threshold = ENERGY_THRESHOLD,
+                        r_intrinsic    = r,
+                        r_top_override = None,    # ← cumulative energy knee
+                        min_frac       = MIN_FRAC,
+                        max_frac       = MAX_FRAC,
                     ))
             elif len(list(module.children())) > 0:
                 _recurse(module)

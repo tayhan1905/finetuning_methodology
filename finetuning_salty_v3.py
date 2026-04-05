@@ -83,8 +83,9 @@ EVAL_BS     = 64
 RANKS       = [8, 16, 32, 64, 128]
 MODES       = ["lora", "dora", "salt", "saltedora_v4"]
 
-# Eigen-dispersion fallback threshold for SALTEdoraLinearV4
-ENERGY_THRESHOLD = 0.9
+# Head/tail split bounds for cumulative energy knee (SALTEdoraLinearV4)
+MIN_FRAC = 0.10   # head gets at least 10% of singular values
+MAX_FRAC = 0.60   # head gets at most 60% of singular values
 
 
 # ===========================================================================
@@ -170,7 +171,8 @@ def replace_qkv_with_adapter(model, r: int, mode: str):
     Freeze the base model then replace Q/K/V linears with the chosen adapter.
 
     For SALTEdoraLinearV4 the head/tail split is determined automatically by
-    eigen dispersion (r_top_override=None), not by a fixed energy fraction.
+    the cumulative energy knee method (r_top_override=None), clamped to
+    [MIN_FRAC, MAX_FRAC] of the total singular values.
     """
     for p in model.parameters():
         p.requires_grad = False
@@ -190,14 +192,14 @@ def replace_qkv_with_adapter(model, r: int, mode: str):
                 if mode == "salt":
                     setattr(parent, name, SALT(module, r=r * 2, lora_rank=r))
                 elif mode == "saltedora_v4":
-                    # Eigen dispersion: r_top_override=None lets the model
-                    # automatically detect the head/tail boundary via curvature
-                    # of the log-singular-value spectrum.
+                    # Cumulative energy knee: r_top_override=None activates the
+                    # knee method, clamped to [MIN_FRAC, MAX_FRAC] of singular values.
                     setattr(parent, name, SALTEdoraLinearV4(
                         module,
-                        r_intrinsic      = r,
-                        r_top_override   = None,
-                        energy_threshold = ENERGY_THRESHOLD,
+                        r_intrinsic = r,
+                        r_top_override = None,
+                        min_frac    = MIN_FRAC,
+                        max_frac    = MAX_FRAC,
                     ))
             elif len(list(module.children())) > 0:
                 _recurse(module)

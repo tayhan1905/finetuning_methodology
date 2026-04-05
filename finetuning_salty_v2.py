@@ -146,10 +146,9 @@ def replace_qkv_with_adapter(model, r=8, mode="lora", energy_threshold: float | 
                     setattr(parent, name, SALTEdoraLinearV3(module, r_intrinsic=r, energy_threshold=et))
                 elif mode == "saltedora_v4":
                     # r_top_override controls the head/tail split:
-                    #   - float (0–1) → use that fraction of singular values as head (bypasses eigen dispersion)
-                    #   - None        → eigen dispersion auto-detects the split boundary
-                    et = 0.9 if energy_threshold is None else float(energy_threshold)
-                    setattr(parent, name, SALTEdoraLinearV4(module, r_intrinsic=r, r_top_override=r_top_override, energy_threshold=et))
+                    #   - float (0–1) → use that fraction of singular values as head (bypasses knee)
+                    #   - None        → cumulative energy knee auto-detects the split boundary
+                    setattr(parent, name, SALTEdoraLinearV4(module, r_intrinsic=r, r_top_override=r_top_override))
             else:
                 if len(list(module.children())) > 0:
                     _recurse(module)
@@ -394,4 +393,4 @@ if __name__ == "__main__":
     os.makedirs("./results", exist_ok=True)
     summary_df.to_csv("./results/summary_sst2_fullft_dora_saltedoraV4_energy_sweep.csv", index=False)
     logger.info("Global summary saved to ./results/summary_sst2_fullft_dora_saltedoraV4_energy_sweep.csv")
-    print(summary_df)
+    print(summary_d

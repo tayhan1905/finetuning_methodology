@@ -3,13 +3,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from utils.svd_utils import svd_head_tail
 
-# This is for adaptive eigen dispersion
+# This is for adaptive eigen dispersion (legacy — kept for reference)
 def choose_head_rank_by_eigen_dispersion(S: torch.Tensor,
                                          min_r: int = 1,
                                          max_r: int | None = None,
                                          energy_threshold: float = 0.90) -> int:
     S = S.detach().float().clamp_min(1e-12)
-    n = S.numel()  
+    n = S.numel()
     if n <= 2:
         return max(min_r, min(n, n - 1))
     if max_r is None:
@@ -23,6 +23,56 @@ def choose_head_rank_by_eigen_dispersion(S: torch.Tensor,
         cum = torch.cumsum(S**2, 0)
         r_top = int(torch.searchsorted(cum, energy_threshold * cum[-1]).item() + 1)
     return max(min_r, min(r_top, max_r))
+
+
+def choose_head_rank_by_knee(S: torch.Tensor,
+                              min_frac: float = 0.10,
+                              max_frac: float = 0.60) -> int:
+    """
+    Cumulative energy knee method for head/tail rank selection.
+
+    Normalises both the index axis (t_i = i/n) and the cumulative energy
+    axis (e_i = sum(sigma_1^2..sigma_i^2) / sum(sigma^2)) to [0, 1], then
+    finds the index where the energy curve deviates most above the diagonal:
+
+        knee = argmax_i (e_i - t_i)
+
+    Intuitively this is the "elbow" of the scree plot — the point where adding
+    more singular values to the head stops giving proportionate energy returns.
+    The result is clamped to [min_frac * n, max_frac * n] so extreme splits
+    (e.g. 99% head or 1% head) are ruled out regardless of spectrum shape.
+
+    Parameters
+    ----------
+    S        : singular values in descending order (1-D tensor)
+    min_frac : minimum fraction of total singular values assigned to the head
+    max_frac : maximum fraction of total singular values assigned to the head
+
+    Returns
+    -------
+    r_top : int  (head rank)
+    """
+    S = S.detach().float().clamp_min(1e-12)
+    n = S.numel()
+    if n <= 2:
+        return max(1, int(round(min_frac * n)))
+
+    total_energy = (S ** 2).sum()
+    cum_energy   = torch.cumsum(S ** 2, dim=0)
+
+    # Normalised axes: both in [0, 1]
+    e = cum_energy / total_energy
+    t = torch.arange(1, n + 1, dtype=torch.float32, device=S.device) / n
+
+    # Knee = index of maximum deviation above the diagonal
+    deviation = e - t
+    knee = int(torch.argmax(deviation).item()) + 1  # convert to 1-indexed
+
+    # Clamp to [min_frac * n, max_frac * n]
+    min_r = max(1, int(round(min_frac * n)))
+    max_r = max(min_r, int(round(max_frac * n)))
+
+    return max(min_r, min(knee, max_r))
 
 # ----------------------------
 # SALT
@@ -228,7 +278,9 @@ class SALTEdoraLinearV3(nn.Module):
                  min_r_top: int = 1,
                  max_r_top: int | None = None,
                  r_top_override: int | None = None,
-                 energy_threshold: float = 0.9):
+                 energy_threshold: float = 0.9,
+                 min_frac: float = 0.10,
+                 max_frac: float = 0.60):
         super().__init__()
         assert isinstance(base_linear, nn.Linear)
         self.base = base_linear
@@ -246,9 +298,9 @@ class SALTEdoraLinearV3(nn.Module):
         U, S, Vh = torch.linalg.svd(W, full_matrices=False)
         dtype, device = W.dtype, W.device
 
-        # 1️⃣ Split by eigen dispersion (e.g., head=600, tail=400)
+        # 1️⃣ Split by cumulative energy knee (e.g., head=30%, tail=70%)
         if r_top_override is None:
-            r_top = choose_head_rank_by_eigen_dispersion(S, min_r_top, max_r_top, energy_threshold=energy_threshold)
+            r_top = choose_head_rank_by_knee(S, min_frac=min_frac, max_frac=max_frac)
         else:
             r_top = int(r_top_override)
         r_top = max(0, min(r_top, S.numel()))
@@ -355,6 +407,8 @@ class SALTEdoraLinearV4(nn.Module):
         max_r_top: int | None = None,
         r_top_override: float | None = None,
         energy_threshold: float = 0.9,
+        min_frac: float = 0.10,
+        max_frac: float = 0.60,
     ):
         super().__init__()
 
@@ -382,13 +436,13 @@ class SALTEdoraLinearV4(nn.Module):
 
         # Head rank selection
         if r_top_override is None:
-            r_top = choose_head_rank_by_eigen_dispersion(
-                S, min_r_top, max_r_top, energy_threshold=energy_threshold
-            )
+            # Cumulative energy knee: find the elbow of the scree plot and
+            # clamp to [min_frac * k, max_frac * k] to avoid extreme splits.
+            r_top = choose_head_rank_by_knee(S, min_frac=min_frac, max_frac=max_frac)
         else:
-            p = float(r_top_override)      
-            p = max(0.0, min(1.0, p))             
-            r_top = int(round(p * k)) 
+            p = float(r_top_override)
+            p = max(0.0, min(1.0, p))
+            r_top = int(round(p * k))
 
         r_top = max(0, min(int(r_top), S.numel()))
         r_tail = S.numel() - r_top
