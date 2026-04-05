@@ -26,8 +26,8 @@ def choose_head_rank_by_eigen_dispersion(S: torch.Tensor,
 
 
 def choose_head_rank_by_knee(S: torch.Tensor,
-                              min_frac: float = 0.10,
-                              max_frac: float = 0.60) -> int:
+                              min_frac: float = 0.50,
+                              max_frac: float = 0.90) -> int:
     """
     Cumulative energy knee method for head/tail rank selection.
 
