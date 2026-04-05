@@ -396,6 +396,16 @@ class SALTEdoraLinearV4(nn.Module):
         self.r_top = r_top
         self.r_tail = r_tail
 
+        # Log the head/tail split so we can verify eigen dispersion is working
+        import logging
+        _logger = logging.getLogger(__name__)
+        _logger.info(
+            f"[SALTEdoraLinearV4] shape=({self.out_features}x{self.in_features}) | "
+            f"total_singular={k} | r_top={r_top} ({100*r_top/k:.1f}%) | "
+            f"r_tail={r_tail} ({100*r_tail/k:.1f}%) | "
+            f"r_intrinsic={min(r_intrinsic, r_tail)}"
+        )
+
         # Split:
         #     W0 = U_top S_top V_top^T + U_tail S_tail V_tail^T
         U_top  = U[:, :r_top]

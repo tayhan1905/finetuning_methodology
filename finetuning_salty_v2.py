@@ -93,14 +93,24 @@ class WeightMatrixSaveCallback(TrainerCallback):
 # ----------------------------
 # Adapter Replacement function
 # ----------------------------
-# ===================== [UPDATED] add energy_threshold param =====================
-def replace_qkv_with_adapter(model, r=8, mode="lora", energy_threshold: float | None = None):
+# ===================== [UPDATED] add energy_threshold + r_top_override params =====================
+def replace_qkv_with_adapter(model, r=8, mode="lora", energy_threshold: float | None = None,
+                              r_top_override: float | None = None):
     """
     Replaces ONLY the query/key/value linear layers in BERT's attention modules
     with the specified adapter type (LoRA, DoRA, SALT, SALT-EDoRA, SALT-EDoRA-V2, SALT-EDoRA-V3, SALT-EDoRA-V4).
 
     Ensures the base model is frozen before replacement so that
     trainable parameter counts remain comparable and small.
+
+    Args:
+        r_top_override : float | None
+            When set (e.g. 0.6), interpreted as a fraction of total singular
+            values to place in the head, bypassing eigen dispersion entirely.
+            When None, eigen dispersion automatically determines the split.
+        energy_threshold : float | None
+            Fallback threshold used inside choose_head_rank_by_eigen_dispersion
+            when r_top_override is None and the curvature signal is too weak.
     """
 
     if mode == "full_ft":
@@ -135,10 +145,11 @@ def replace_qkv_with_adapter(model, r=8, mode="lora", energy_threshold: float | 
                     et = 0.9 if energy_threshold is None else float(energy_threshold)
                     setattr(parent, name, SALTEdoraLinearV3(module, r_intrinsic=r, energy_threshold=et))
                 elif mode == "saltedora_v4":
-                    # ===================== [UPDATED] use passed energy_threshold, default=0.9 =====================
-                    # TODO: Try to make this more elegant >> I use the override here to test out different patterns and see which one offers the best accuracy >> right now the metric gives about half, we should see whether we can attempt to make this btr
+                    # r_top_override controls the head/tail split:
+                    #   - float (0–1) → use that fraction of singular values as head (bypasses eigen dispersion)
+                    #   - None        → eigen dispersion auto-detects the split boundary
                     et = 0.9 if energy_threshold is None else float(energy_threshold)
-                    setattr(parent, name, SALTEdoraLinearV4(module, r_intrinsic=r, r_top_override=et, energy_threshold=et))
+                    setattr(parent, name, SALTEdoraLinearV4(module, r_intrinsic=r, r_top_override=r_top_override, energy_threshold=et))
             else:
                 if len(list(module.children())) > 0:
                     _recurse(module)
@@ -258,14 +269,16 @@ class TrackingCallback(TrainerCallback):
 # ----------------------------
 # Training + Evaluation
 # ----------------------------
-# ===================== [UPDATED] add energy_threshold to signature + output_dir =====================
+# ===================== [UPDATED] add energy_threshold + r_top_override to signature + output_dir =====================
 def train_and_evaluate(
     model, train_ds, val_ds, tokenizer, model_name, r, mode, task_key,
-    num_labels, problem_type, metrics_fn, energy_threshold: float | None = None
+    num_labels, problem_type, metrics_fn, energy_threshold: float | None = None,
+    r_top_override: float | None = None
 ):
     safe_task = task_key.replace("/", "_")
-    et_tag = "na" if energy_threshold is None else f"{float(energy_threshold):.2f}"
-    output_dir = f"./results/{model_name}/{mode}/r_{r}/et_{et_tag}/{safe_task}"
+    et_tag  = "na"     if energy_threshold is None else f"{float(energy_threshold):.2f}"
+    rto_tag = "eigdisp" if r_top_override   is None else f"{float(r_top_override):.2f}"
+    output_dir = f"./results/{model_name}/{mode}/r_{r}/rto_{rto_tag}/{safe_task}"
     os.makedirs(output_dir, exist_ok=True)
 
     args = TrainingArguments(
@@ -302,15 +315,16 @@ def train_and_evaluate(
     results = trainer.evaluate(val_ds)
     total_runtime = time.time() - start_time
 
-    results["trainable_params"] = count_trainable_params(model)
-    results["runtime_total_s"] = total_runtime
-    results["energy_threshold"] = energy_threshold
+    results["trainable_params"]  = count_trainable_params(model)
+    results["runtime_total_s"]   = total_runtime
+    results["energy_threshold"]  = energy_threshold
+    results["r_top_override"]    = r_top_override
 
     with open(os.path.join(output_dir, "results.json"), "w") as f:
         json.dump(results, f, indent=4)
 
-    print(f"🔹 Completed {mode} | {task_key} | r={r} | et={et_tag} | Accuracy={results.get('eval_accuracy', 'N/A'):.4f} | Runtime={total_runtime:.2f}s")
-    logger.info(f"🔹 Completed {mode} | {task_key} | r={r} | et={et_tag} | Accuracy={results.get('eval_accuracy', 'N/A'):.4f} | Runtime={total_runtime:.2f}s")
+    print(f"🔹 Completed {mode} | {task_key} | r={r} | rto={rto_tag} | Accuracy={results.get('eval_accuracy', 'N/A'):.4f} | Runtime={total_runtime:.2f}s")
+    logger.info(f"🔹 Completed {mode} | {task_key} | r={r} | rto={rto_tag} | Accuracy={results.get('eval_accuracy', 'N/A'):.4f} | Runtime={total_runtime:.2f}s")
     return results
 
 # ----------------------------
@@ -348,25 +362,32 @@ if __name__ == "__main__":
 
         base_model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=num_labels)
 
-        # ===================== [UPDATED] pass energy_threshold through =====================
-        model = replace_qkv_with_adapter(base_model, r=r, mode=mode, energy_threshold=et)
+        # et is passed as r_top_override so it directly controls the head/tail split
+        # fraction (e.g. 0.6 → top 60% of singular values go to head).
+        # energy_threshold is kept at the same value and acts as the fallback
+        # inside choose_head_rank_by_eigen_dispersion when r_top_override is None.
+        model = replace_qkv_with_adapter(
+            base_model, r=r, mode=mode,
+            energy_threshold=et, r_top_override=et
+        )
 
         results = train_and_evaluate(
             model, train_ds, val_ds, tokenizer,
             model_name, r, mode, task_key,
             num_labels, problem_type, metrics_fn,
-            energy_threshold=et
+            energy_threshold=et, r_top_override=et
         )
 
         summary_rows.append({
-            "rank": r,
-            "mode": mode,
+            "rank":             r,
+            "mode":             mode,
             "energy_threshold": et,
-            "task": task_key,
-            "accuracy": results.get("eval_accuracy", None),
-            "eval_loss": results.get("eval_loss", None),
-            "runtime_s": results.get("runtime_total_s", None),
-            "trainable_params": results.get("trainable_params", None)
+            "r_top_override":   et,
+            "task":             task_key,
+            "accuracy":         results.get("eval_accuracy", None),
+            "eval_loss":        results.get("eval_loss", None),
+            "runtime_s":        results.get("runtime_total_s", None),
+            "trainable_params": results.get("trainable_params", None),
         })
 
     summary_df = pd.DataFrame(summary_rows)
