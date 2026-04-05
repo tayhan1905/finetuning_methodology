@@ -1,0 +1,36 @@
+\vspace{4pt}
+\noindent
+\textbf{Cumulative Energy Knee–Based Subspace Partitioning.}
+To determine the boundary between the dominant and residual spectral subspaces,
+SALT–EDoRA employs a \emph{cumulative energy knee} criterion that adaptively selects
+\(r_{\text{top}}\) from the intrinsic geometry of the singular value spectrum.
+Given the ordered singular values \(\{\sigma_i\}_{i=1}^{k}\) where \(k = \min(m,n)\),
+two normalised sequences are constructed:
+the cumulative spectral energy
+\(e_i = \bigl(\sum_{j=1}^{i} \sigma_j^2\bigr) \big/ \bigl(\sum_{j=1}^{k} \sigma_j^2\bigr)\)
+and the uniform index axis
+\(t_i = i / k\),
+both of which lie in \([0, 1]\).
+The deviation \(e_i - t_i\) measures how far the actual energy accumulation exceeds
+that of a flat, uninformative spectrum at each rank.
+The knee is defined as the index of maximum deviation,
+\begin{equation}
+    r_{\text{top}} \;=\; \operatorname*{arg\,max}_{i}\,\bigl(e_i - t_i\bigr),
+    \label{eq:knee}
+\end{equation}
+corresponding to the \emph{elbow} of the scree plot—the rank at which adding further
+singular values to the head subspace yields diminishing proportional energy returns.
+Intuitively, all singular vectors to the left of this knee constitute the compact,
+high-energy regime that SALT's scale-and-shift parameterisation is designed to
+preserve; those to the right form the dispersed, low-energy residual that EDoRA's
+intrinsic-rank reparameterisation targets.
+To preclude degenerate splits in layers whose spectra are nearly flat or
+pathologically sharp, the knee index is clamped to
+\(r_{\text{top}} \in [\alpha_{\min} k,\, \alpha_{\max} k]\),
+where \(\alpha_{\min} = 0.50\) and \(\alpha_{\max} = 0.90\) ensure
+that the head always constitutes the majority of the spectral mass
+while leaving a non-trivial residual subspace for the tail update.
+This adaptive partitioning requires no tuning beyond the two fractional bounds
+and reflects the intrinsic spectral structure of each weight matrix,
+providing a principled foundation for allocating parameters between
+spectral scale-shift adaptation and low-rank directional reparameterisation.
