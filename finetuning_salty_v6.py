@@ -70,8 +70,8 @@ logger = logging.getLogger()
 # ---------------------------------------------------------------------------
 MODEL_NAME   = "bert-base-uncased"
 NUM_EPOCHS   = 5
-LR           = 5e-5
-WEIGHT_DECAY = 0.01
+LR           = 1e-4
+WEIGHT_DECAY = 0.1
 TRAIN_BS     = 16
 EVAL_BS      = 64
 
