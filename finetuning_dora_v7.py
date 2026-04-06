@@ -68,8 +68,8 @@ TASK_KEY     = "glue/sst2"
 RANK         = 64
 ALPHA        = 64          # scaling = alpha / r = 1.0
 NUM_EPOCHS   = 5
-LR           = 5e-5
-WEIGHT_DECAY = 0.01
+LR           = 1e-4
+WEIGHT_DECAY = 0.1
 TRAIN_BS     = 16
 EVAL_BS      = 64
 TOP_K_ANGLES = 32
