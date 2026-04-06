@@ -34,6 +34,14 @@ results_v9/principal_angles/cut_<X>/
     <layer>_trajectory_angles.npz
 
 results_v9/summary_v9_energy_cuts.csv
+
+Hyperparameters
+---------------
+    learning_rate = 1e-4   (tuned; previous run used 5e-5)
+    weight_decay  = 0.1    (tuned; previous run used 0.01)
+    train_batch   = 16
+    eval_batch    = 64
+    epochs        = 5
 """
 
 import os
@@ -72,8 +80,8 @@ MODEL_NAME   = "bert-base-uncased"
 TASK_KEY     = "glue/sst2"
 RANK         = 64
 NUM_EPOCHS   = 5
-LR           = 5e-5
-WEIGHT_DECAY = 0.01
+LR           = 1e-4
+WEIGHT_DECAY = 0.1
 TRAIN_BS     = 16
 EVAL_BS      = 64
 TOP_K_ANGLES = 32

@@ -66,7 +66,7 @@ def choose_head_rank_by_knee(S: torch.Tensor,
 
     # Knee = index of maximum deviation above the diagonal
     deviation = e - t
-    knee = int(torch.argmax(deviation).item()) + 1  + (0.25 * n)# convert to 1-indexe
+    knee = int(torch.argmax(deviation).item()) + 1  + (0.5 * n)# convert to 1-indexe
 
     # Clamp to [min_frac * n, max_frac * n]
     min_r = max(1, int(round(min_frac * n)))
